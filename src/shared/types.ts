@@ -130,9 +130,16 @@ export interface GitGraphCommit {
   parents: string[]
   message: string
   author: string
+  email: string
+  /** ISO commit date. */
+  date: string
   relative: string
+  /** commit body (after the subject line). */
+  body: string
   refs: string[]
 }
+
+export type MergeMode = 'default' | 'no-ff' | 'squash' | 'no-commit'
 export interface GitStatus {
   isRepo: boolean
   /** false when the configured repoPath no longer exists on disk. */

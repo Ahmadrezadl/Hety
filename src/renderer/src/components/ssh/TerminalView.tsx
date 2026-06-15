@@ -183,7 +183,17 @@ export default function TerminalView({
           <RotateCw size={12} /> Reconnect
         </button>
       </div>
-      <div ref={hostRef} className="min-h-0 flex-1 bg-bg-base" />
+      <div
+        ref={hostRef}
+        className="min-h-0 flex-1 bg-bg-base"
+        onContextMenu={(e) => {
+          // Right-click pastes the clipboard into the session (in addition to Ctrl+Shift+V).
+          e.preventDefault()
+          void navigator.clipboard.readText().then((text) => {
+            if (text && idRef.current) window.api.ssh.input(idRef.current, text)
+          })
+        }}
+      />
     </div>
   )
 }

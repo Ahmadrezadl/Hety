@@ -1,8 +1,8 @@
 import { ipcMain } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import simpleGit, { type SimpleGit } from 'simple-git'
-import type { GitStatus, GitFile, GitCommit, GitGraphCommit, Result } from '@shared/types'
+import type { GitStatus, GitFile, GitCommit, GitGraphCommit, MergeMode, Result } from '@shared/types'
 
 function git(path: string): SimpleGit {
   return simpleGit(path)
@@ -94,28 +94,34 @@ async function log(path: string): Promise<GitCommit[]> {
 }
 
 const GU = '\x1f' // unit separator between fields
+const GR = '\x1e' // record separator between commits (body may contain newlines)
 async function graphLog(path: string): Promise<GitGraphCommit[]> {
   const g = git(path)
   try {
+    const now = Date.now()
     // --date-order keeps children before their parents, which the lane layout needs.
     const raw = await g.raw([
       'log',
       '--all',
       '--date-order',
       '--max-count=300',
-      `--pretty=format:%H${GU}%P${GU}%s${GU}%an${GU}%ar${GU}%D`
+      `--pretty=format:%H${GU}%P${GU}%s${GU}%an${GU}%ae${GU}%cI${GU}%D${GU}%b${GR}`
     ])
     return raw
-      .split('\n')
+      .split(GR)
+      .map((r) => r.replace(/^\n/, ''))
       .filter((l) => l.trim().length > 0)
-      .map((line) => {
-        const [hash, parents, message, author, relative, refs] = line.split(GU)
+      .map((record) => {
+        const [hash, parents, message, author, email, date, refs, body] = record.split(GU)
         return {
           hash,
           parents: parents ? parents.split(' ').filter(Boolean) : [],
           message: message ?? '',
           author: author ?? '',
-          relative: relative ?? '',
+          email: email ?? '',
+          date: date ?? '',
+          relative: date ? humanize(now - new Date(date).getTime()) : '',
+          body: (body ?? '').trim(),
           refs: refs
             ? refs
                 .split(',')
@@ -127,6 +133,54 @@ async function graphLog(path: string): Promise<GitGraphCommit[]> {
   } catch {
     return []
   }
+}
+
+function parseNameStatus(raw: string): GitFile[] {
+  const out: GitFile[] = []
+  for (const line of raw.split('\n')) {
+    const t = line.replace(/\r$/, '')
+    if (!t.trim()) continue
+    const parts = t.split('\t')
+    const code = parts[0]?.[0] ?? 'M'
+    // For renames/copies (Rxxx/Cxxx) the new path is the last column.
+    const file = parts[parts.length - 1]
+    if (file) out.push({ path: file, code })
+  }
+  return out
+}
+
+async function commitFiles(path: string, hash: string): Promise<GitFile[]> {
+  try {
+    const raw = await git(path).raw(['diff-tree', '--no-commit-id', '--name-status', '-r', '-M', hash])
+    return parseNameStatus(raw)
+  } catch {
+    return []
+  }
+}
+
+interface DiffParams {
+  hash?: string
+  file: string
+  staged?: boolean
+  untracked?: boolean
+}
+async function diff(path: string, p: DiffParams): Promise<string> {
+  const g = git(path)
+  if (p.hash) return g.raw(['show', '--format=', '--no-color', '-M', p.hash, '--', p.file])
+  if (p.untracked) {
+    try {
+      const content = await fs.readFile(join(path, p.file), 'utf8')
+      const lines = content.split('\n')
+      return (
+        `--- /dev/null\n+++ b/${p.file}\n@@ -0,0 +1,${lines.length} @@\n` +
+        lines.map((l) => '+' + l).join('\n')
+      )
+    } catch {
+      return ''
+    }
+  }
+  if (p.staged) return g.raw(['diff', '--cached', '--no-color', '--', p.file])
+  return g.raw(['diff', '--no-color', '--', p.file])
 }
 
 function humanize(ms: number): string {
@@ -153,6 +207,12 @@ export function registerGitIpc(): void {
   ipcMain.handle('git:status', (_e, path: string) => wrap(() => status(path)))
   ipcMain.handle('git:log', (_e, path: string) => wrap(() => log(path)))
   ipcMain.handle('git:graphLog', (_e, path: string) => wrap(() => graphLog(path)))
+  ipcMain.handle('git:commitFiles', (_e, { path, hash }: { path: string; hash: string }) =>
+    wrap(() => commitFiles(path, hash))
+  )
+  ipcMain.handle('git:diff', (_e, { path, ...params }: { path: string } & DiffParams) =>
+    wrap(() => diff(path, params))
+  )
 
   ipcMain.handle('git:stage', (_e, { path, files }: { path: string; files: string[] }) =>
     wrap(async () => {
@@ -223,10 +283,70 @@ export function registerGitIpc(): void {
       await git(path).push()
     })
   )
-  ipcMain.handle('git:merge', (_e, { path, branch }: { path: string; branch: string }) =>
+  ipcMain.handle(
+    'git:merge',
+    (
+      _e,
+      { path, source, into, mode }: { path: string; source: string; into?: string; mode?: MergeMode }
+    ) =>
+      wrap(async () => {
+        const g = git(path)
+        // Fork-style: merge `source` into `into`; check out the target first if needed.
+        if (into) {
+          const cur = (await g.branch()).current
+          if (cur !== into) await g.checkout(into)
+        }
+        const args: string[] = []
+        if (mode === 'no-ff') args.push('--no-ff')
+        else if (mode === 'squash') args.push('--squash')
+        else if (mode === 'no-commit') args.push('--no-commit')
+        args.push(source)
+        await g.merge(args)
+      })
+  )
+  ipcMain.handle(
+    'git:createBranch',
+    (
+      _e,
+      {
+        path,
+        name,
+        checkout,
+        startPoint
+      }: { path: string; name: string; checkout?: boolean; startPoint?: string }
+    ) =>
+      wrap(async () => {
+        const g = git(path)
+        if (checkout) {
+          if (startPoint) await g.checkout(['-b', name, startPoint])
+          else await g.checkoutLocalBranch(name)
+        } else {
+          await g.branch(startPoint ? [name, startPoint] : [name])
+        }
+      })
+  )
+  ipcMain.handle(
+    'git:renameBranch',
+    (_e, { path, from, to }: { path: string; from: string; to: string }) =>
+      wrap(async () => {
+        await git(path).branch(['-m', from, to])
+      })
+  )
+  ipcMain.handle(
+    'git:deleteBranch',
+    (_e, { path, name, force }: { path: string; name: string; force?: boolean }) =>
+      wrap(async () => {
+        await git(path).branch([force ? '-D' : '-d', name])
+      })
+  )
+  ipcMain.handle('git:cherryPick', (_e, { path, hash }: { path: string; hash: string }) =>
     wrap(async () => {
-      // Strip a remote prefix so "origin/feature" merges the right ref name.
-      await git(path).merge([branch])
+      await git(path).raw(['cherry-pick', hash])
+    })
+  )
+  ipcMain.handle('git:revert', (_e, { path, hash }: { path: string; hash: string }) =>
+    wrap(async () => {
+      await git(path).raw(['revert', '--no-edit', hash])
     })
   )
   ipcMain.handle(

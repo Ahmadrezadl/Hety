@@ -49,4 +49,28 @@ export function registerAppIpc(): void {
       }
     }
   )
+
+  ipcMain.handle('app:openTerminal', (_e, path: string): Result => {
+    try {
+      // Launch with cwd = path so the new console opens in the repo folder. The
+      // started shell inherits this working directory (avoids fragile `cd` args).
+      let child
+      if (process.platform === 'win32') {
+        child = spawn('cmd.exe', ['/c', 'start', 'cmd.exe'], {
+          cwd: path,
+          detached: true,
+          stdio: 'ignore'
+        })
+      } else if (process.platform === 'darwin') {
+        child = spawn('open', ['-a', 'Terminal', path], { detached: true, stdio: 'ignore' })
+      } else {
+        child = spawn('x-terminal-emulator', [], { cwd: path, detached: true, stdio: 'ignore' })
+      }
+      child.on('error', () => undefined)
+      child.unref()
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  })
 }

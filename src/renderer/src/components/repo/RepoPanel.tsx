@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode
+} from 'react'
 import {
   GitBranch,
   RefreshCw,
@@ -8,37 +16,46 @@ import {
   FolderSearch,
   FolderGit2,
   ExternalLink,
-  GitMerge,
   Tag,
   Search,
   ChevronDown,
+  ChevronRight,
   Check,
-  Network,
-  List,
   Plus,
   X,
   Download,
-  Folder
+  Folder,
+  TerminalSquare,
+  GitCommitHorizontal,
+  FileDiff,
+  Copy,
+  Pencil,
+  Trash2,
+  FolderTree
 } from 'lucide-react'
 import type {
   Project,
   Repository,
   GitStatus,
-  GitCommit,
   GitFile,
-  GitGraphCommit
+  GitGraphCommit,
+  MergeMode
 } from '@shared/types'
 import { useApp, newId } from '../../store'
 import { basename } from '../../lib/projects'
 import { Button, Spinner, Modal, Input, Field, cn } from '../../lib/ui'
+import { toast } from '../../lib/toast'
+import DiffView from './DiffView'
 
 const CODE_COLOR: Record<string, string> = {
   M: '#e0b341',
   A: '#46c08a',
   D: '#e0625e',
   R: '#6d8cff',
+  C: '#6d8cff',
   '?': '#46c08a'
 }
+const codeLetter = (c: string): string => (c === '?' ? 'U' : c[0] ?? 'M')
 
 const EDITORS: { label: string; command: string }[] = [
   { label: 'Explorer', command: '' },
@@ -48,10 +65,16 @@ const EDITORS: { label: string; command: string }[] = [
   { label: 'Rider', command: 'rider' }
 ]
 
-type HistTab = 'commits' | 'graph'
 type TagTarget = { hash: string; message: string }
 
-/** Outer panel: manages the project's repositories as tabs. */
+function splitPath(p: string): { dir: string; name: string } {
+  const i = p.lastIndexOf('/')
+  return i >= 0 ? { dir: p.slice(0, i), name: p.slice(i + 1) } : { dir: '', name: p }
+}
+
+// ============================================================================
+// Outer panel: manages the project's repositories as tabs.
+// ============================================================================
 export default function RepoPanel({ project }: { project: Project }): ReactNode {
   const upsertProject = useApp((s) => s.upsertProject)
   const repositories = project.repositories ?? []
@@ -62,8 +85,7 @@ export default function RepoPanel({ project }: { project: Project }): ReactNode 
 
   const active = repositories.find((r) => r.id === activeId) ?? repositories[0] ?? null
 
-  const setRepos = (repos: Repository[]): void =>
-    upsertProject({ ...project, repositories: repos })
+  const setRepos = (repos: Repository[]): void => upsertProject({ ...project, repositories: repos })
 
   const addRepoFromPath = (path: string, name: string): void => {
     const repo: Repository = { id: newId(), name: name || basename(path), path }
@@ -118,11 +140,7 @@ export default function RepoPanel({ project }: { project: Project }): ReactNode 
   }
 
   const addDialog = addOpen ? (
-    <AddRepoDialog
-      onClose={() => setAddOpen(false)}
-      onPickExisting={pickExisting}
-      onClone={cloneRepo}
-    />
+    <AddRepoDialog onClose={() => setAddOpen(false)} onPickExisting={pickExisting} onClone={cloneRepo} />
   ) : null
 
   if (repositories.length === 0) {
@@ -144,7 +162,6 @@ export default function RepoPanel({ project }: { project: Project }): ReactNode 
 
   return (
     <div className="flex h-full flex-col">
-      {/* Repository tab bar */}
       <div className="flex items-stretch overflow-x-auto border-b border-line bg-bg-panel">
         {repositories.map((r) => (
           <div
@@ -207,13 +224,1345 @@ export default function RepoPanel({ project }: { project: Project }): ReactNode 
   )
 }
 
-function deriveRepoName(url: string): string {
-  const cleaned = url.trim().replace(/\.git$/i, '').replace(/[/\\]+$/, '')
-  const seg = cleaned.split(/[/:\\]/).filter(Boolean).pop() ?? ''
-  return seg
+// ============================================================================
+// Inner panel: Fork-style Git UI for a single repository.
+// ============================================================================
+function RepoView({ path, onPickFolder }: { path: string; onPickFolder: () => void }): ReactNode {
+  const [status, setStatus] = useState<GitStatus | null>(null)
+  const [graph, setGraph] = useState<GitGraphCommit[]>([])
+  const [busy, setBusy] = useState(false)
+  const [view, setView] = useState<'changes' | 'commits'>('commits')
+  const [filter, setFilter] = useState('')
+  const [selHash, setSelHash] = useState<string | null>(null)
+  const [tagFor, setTagFor] = useState<TagTarget | null>(null)
+  const [mergeReq, setMergeReq] = useState<{ source: string; into: string } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; branch: string; remote: boolean } | null>(null)
+  const [commitMenu, setCommitMenu] = useState<{ x: number; y: number; commit: GitGraphCommit } | null>(null)
+  const [checkoutCommit, setCheckoutCommit] = useState<GitGraphCommit | null>(null)
+  const [prompt, setPrompt] = useState<{
+    title: string
+    label: string
+    initial: string
+    confirmLabel: string
+    onSubmit: (v: string) => void
+  } | null>(null)
+
+  const refresh = useCallback(async () => {
+    if (!path) return
+    const [st, gr] = await Promise.all([window.api.git.status(path), window.api.git.graphLog(path)])
+    if (st.ok && st.data) setStatus(st.data)
+    if (gr.ok && gr.data) setGraph(gr.data)
+  }, [path])
+
+  useEffect(() => {
+    refresh()
+  }, [refresh])
+
+  const run = async (
+    fn: () => Promise<{ ok: boolean; error?: string }>,
+    okMsg?: string
+  ): Promise<void> => {
+    setBusy(true)
+    const r = await fn()
+    setBusy(false)
+    if (!r.ok) toast.error(r.error ?? 'Failed')
+    else if (okMsg) toast.success(okMsg)
+    await refresh()
+  }
+
+  if (!path) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+        <FolderGit2 size={44} className="text-ink-faint" />
+        <div className="text-[15px] font-semibold text-ink-soft">No repository folder set</div>
+        <Button onClick={onPickFolder}>
+          <FolderOpen size={16} /> Choose repository folder
+        </Button>
+      </div>
+    )
+  }
+
+  if (status && !status.isRepo) {
+    const missing = !status.exists
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+        <FolderGit2 size={44} className="text-ink-faint" />
+        <div className="text-[15px] font-semibold text-ink-soft">
+          {missing ? 'Repository folder not found' : 'Not a Git repository'}
+        </div>
+        <div className="max-w-md break-all text-xs text-ink-faint">{path}</div>
+        {missing && (
+          <p className="max-w-sm text-xs text-ink-faint">
+            The folder may have been moved or deleted. Your SSH servers and databases for this
+            project are still saved — just point the repository to its new location.
+          </p>
+        )}
+        <Button onClick={onPickFolder}>
+          {missing ? (
+            <>
+              <FolderSearch size={16} /> Locate folder
+            </>
+          ) : (
+            <>
+              <FolderOpen size={16} /> Change folder
+            </>
+          )}
+        </Button>
+      </div>
+    )
+  }
+
+  const changeCount = (status?.staged.length ?? 0) + (status?.unstaged.length ?? 0)
+  const selectedCommit = graph.find((c) => c.hash === selHash) ?? null
+
+  const checkout = (branch: string): void => {
+    run(() => window.api.git.checkout(path, branch), `Switched to ${branch}`)
+  }
+  const checkoutRemote = (ref: string): void => {
+    run(() => window.api.git.checkoutRemote(path, ref), `Checked out ${ref}`)
+  }
+
+  const onMergeConfirm = (source: string, into: string, mode: MergeMode): void => {
+    setMergeReq(null)
+    run(() => window.api.git.merge(path, source, { into, mode }), `Merged ${source} into ${into}`)
+  }
+
+  const branchMenuItems = (branch: string, remote: boolean): MenuItem[] => {
+    const items: MenuItem[] = []
+    items.push({ label: 'Checkout', onClick: () => (remote ? checkoutRemote(branch) : checkout(branch)) })
+    if (status && branch !== status.branch)
+      items.push({
+        label: `Merge into '${status.branch}'`,
+        onClick: () => setMergeReq({ source: branch, into: status.branch })
+      })
+    if (!remote) {
+      items.push({
+        label: 'New branch from here…',
+        onClick: () =>
+          setPrompt({
+            title: 'New branch',
+            label: `Create a branch starting at '${branch}'`,
+            initial: '',
+            confirmLabel: 'Create',
+            onSubmit: (v) => {
+              setPrompt(null)
+              run(async () => {
+                const co = await window.api.git.checkout(path, branch)
+                if (!co.ok) return co
+                return window.api.git.createBranch(path, v, true)
+              }, `Created ${v}`)
+            }
+          })
+      })
+      items.push({
+        label: 'Rename…',
+        onClick: () =>
+          setPrompt({
+            title: 'Rename branch',
+            label: `New name for '${branch}'`,
+            initial: branch,
+            confirmLabel: 'Rename',
+            onSubmit: (v) => {
+              setPrompt(null)
+              run(() => window.api.git.renameBranch(path, branch, v), `Renamed to ${v}`)
+            }
+          })
+      })
+      items.push({
+        label: 'Delete…',
+        danger: true,
+        onClick: () => {
+          if (confirm(`Delete branch '${branch}'?`))
+            run(() => window.api.git.deleteBranch(path, branch), `Deleted ${branch}`)
+        }
+      })
+    }
+    items.push({ label: 'Copy name', onClick: () => navigator.clipboard.writeText(branch) })
+    return items
+  }
+
+  const commitMenuItems = (c: GitGraphCommit): MenuItem[] => {
+    const short = c.hash.slice(0, 7)
+    return [
+      {
+        label: 'Checkout',
+        onClick: () => run(() => window.api.git.checkout(path, c.hash), `Checked out ${short}`)
+      },
+      {
+        label: 'New branch…',
+        onClick: () =>
+          setPrompt({
+            title: 'New branch',
+            label: `Create a branch at ${short}`,
+            initial: '',
+            confirmLabel: 'Create',
+            onSubmit: (v) => {
+              setPrompt(null)
+              run(() => window.api.git.createBranch(path, v, true, c.hash), `Created ${v}`)
+            }
+          })
+      },
+      { label: 'New tag…', onClick: () => setTagFor({ hash: short, message: c.message }) },
+      {
+        label: 'Cherry-pick commit',
+        onClick: () => run(() => window.api.git.cherryPick(path, c.hash), `Cherry-picked ${short}`)
+      },
+      {
+        label: 'Revert commit',
+        onClick: () => run(() => window.api.git.revert(path, c.hash), `Reverted ${short}`)
+      }
+    ]
+  }
+
+  return (
+    <div className="flex h-full flex-col bg-bg-base" onClick={() => menu && setMenu(null)}>
+      {/* Toolbar */}
+      <div className="flex items-center gap-1 border-b border-line bg-bg-panel px-2 py-1.5">
+        <ToolbarBtn
+          icon={<RefreshCw size={15} />}
+          label="Fetch"
+          onClick={() => run(() => window.api.git.fetch(path), 'Fetched')}
+        />
+        <ToolbarBtn
+          icon={<ArrowDown size={15} />}
+          label="Pull"
+          badge={status?.behind || undefined}
+          onClick={() => run(() => window.api.git.pull(path), 'Pulled')}
+        />
+        <ToolbarBtn
+          icon={<ArrowUp size={15} />}
+          label="Push"
+          badge={status?.ahead || undefined}
+          onClick={() => run(() => window.api.git.push(path), 'Pushed')}
+        />
+        <div className="mx-1 h-5 w-px bg-line" />
+        <span className="flex items-center gap-1.5 px-1 text-[12px] font-semibold text-ink">
+          <GitBranch size={14} className="text-accent" />
+          {status?.branch || 'detached HEAD'}
+        </span>
+
+        <div className="ml-auto flex items-center gap-1">
+          {busy && <Spinner className="mr-1" />}
+          <ToolbarBtn
+            icon={<TerminalSquare size={15} />}
+            label="Console"
+            onClick={() => window.api.app.openTerminal(path)}
+          />
+          <OpenInMenu path={path} />
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1">
+        {/* Sidebar */}
+        <aside className="flex w-[230px] shrink-0 flex-col border-r border-line bg-bg-panel">
+          <div className="p-2">
+            <NavItem
+              icon={<FileDiff size={14} />}
+              label="Local Changes"
+              count={changeCount}
+              active={view === 'changes'}
+              onClick={() => setView('changes')}
+            />
+            <NavItem
+              icon={<GitCommitHorizontal size={14} />}
+              label="All Commits"
+              active={view === 'commits'}
+              onClick={() => setView('commits')}
+            />
+          </div>
+          <div className="px-2 pb-2">
+            <div className="relative">
+              <Search size={12} className="pointer-events-none absolute left-2 top-2 text-ink-faint" />
+              <input
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                placeholder="Filter branches & tags…"
+                className="w-full rounded-md bg-bg-input py-1.5 pl-7 pr-2 text-xs outline-none placeholder:text-ink-faint focus:ring-1 focus:ring-accent"
+              />
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto pb-3">
+            {status && (
+              <BranchTree
+                status={status}
+                filter={filter}
+                onCheckout={checkout}
+                onCheckoutRemote={checkoutRemote}
+                onMerge={(source, into) => setMergeReq({ source, into })}
+                onContext={(e, branch, remote) =>
+                  setMenu({ x: e.clientX, y: e.clientY, branch, remote })
+                }
+                onSelectTag={(hash) => {
+                  setView('commits')
+                  setSelHash(hash)
+                }}
+                graph={graph}
+              />
+            )}
+          </div>
+        </aside>
+
+        {/* Main */}
+        <div className="min-w-0 flex-1">
+          {view === 'changes' ? (
+            <LocalChangesView path={path} status={status} busy={busy} run={run} />
+          ) : (
+            <CommitsView
+              path={path}
+              commits={graph}
+              selHash={selHash}
+              onSelect={setSelHash}
+              onDoubleSelect={setCheckoutCommit}
+              onContext={(e, c) => setCommitMenu({ x: e.clientX, y: e.clientY, commit: c })}
+              onTag={setTagFor}
+              commit={selectedCommit}
+            />
+          )}
+        </div>
+      </div>
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={branchMenuItems(menu.branch, menu.remote)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+
+      {commitMenu && (
+        <ContextMenu
+          x={commitMenu.x}
+          y={commitMenu.y}
+          items={commitMenuItems(commitMenu.commit)}
+          onClose={() => setCommitMenu(null)}
+        />
+      )}
+
+      {checkoutCommit && (
+        <Modal title="Checkout commit" width={440} onClose={() => setCheckoutCommit(null)}>
+          <div className="space-y-3">
+            <div className="rounded-md border border-line bg-bg-elevated px-3 py-2 text-[12px]">
+              <span className="font-mono text-accent">{checkoutCommit.hash.slice(0, 7)}</span>{' '}
+              <span className="text-ink-soft">{checkoutCommit.message}</span>
+            </div>
+            <p className="text-xs text-ink-faint">
+              Checking out a specific commit puts the repository in a “detached HEAD” state. Create a
+              branch from here if you want to keep new commits.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setCheckoutCommit(null)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  const h = checkoutCommit.hash
+                  setCheckoutCommit(null)
+                  run(() => window.api.git.checkout(path, h), `Checked out ${h.slice(0, 7)}`)
+                }}
+              >
+                Checkout
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {mergeReq && status && (
+        <MergeOptionsDialog
+          source={mergeReq.source}
+          into={mergeReq.into}
+          onClose={() => setMergeReq(null)}
+          onMerge={(mode) => onMergeConfirm(mergeReq.source, mergeReq.into, mode)}
+        />
+      )}
+
+      {prompt && (
+        <TextPromptModal
+          title={prompt.title}
+          label={prompt.label}
+          initial={prompt.initial}
+          confirmLabel={prompt.confirmLabel}
+          onClose={() => setPrompt(null)}
+          onSubmit={prompt.onSubmit}
+        />
+      )}
+
+      {tagFor && (
+        <TagDialog
+          commit={tagFor}
+          onClose={() => setTagFor(null)}
+          onCreate={(name, msg, push) => {
+            const ref = tagFor.hash
+            setTagFor(null)
+            run(
+              () => window.api.git.addTag(path, name, { ref, message: msg || undefined, push }),
+              push ? `Created & pushed tag ${name}` : `Created tag ${name}`
+            )
+          }}
+        />
+      )}
+    </div>
+  )
 }
 
-/** Choose between adding an existing folder or cloning from a URL. */
+// ---- Toolbar bits ----
+
+function ToolbarBtn({
+  icon,
+  label,
+  badge,
+  onClick
+}: {
+  icon: ReactNode
+  label: string
+  badge?: number
+  onClick: () => void
+}): ReactNode {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] font-semibold text-ink-soft hover:bg-bg-hover hover:text-ink"
+    >
+      {icon}
+      {label}
+      {badge ? (
+        <span className="ml-0.5 rounded-full bg-accent px-1.5 py-px text-[10px] font-bold leading-none text-white">
+          {badge}
+        </span>
+      ) : null}
+    </button>
+  )
+}
+
+function OpenInMenu({ path }: { path: string }): ReactNode {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[12px] font-semibold text-ink-soft hover:bg-bg-hover hover:text-ink"
+      >
+        <ExternalLink size={15} /> Open in
+        <ChevronDown size={12} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full z-40 mt-1 w-44 overflow-hidden rounded-lg border border-line bg-bg-panel py-1 shadow-xl">
+            {EDITORS.map((ed) => (
+              <button
+                key={ed.label}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-bg-hover"
+                onClick={() => {
+                  setOpen(false)
+                  if (ed.command) window.api.app.openEditor(ed.command, path)
+                  else window.api.app.openPath(path)
+                }}
+              >
+                {ed.label === 'Explorer' ? <FolderOpen size={13} /> : <ExternalLink size={13} />}
+                {ed.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function NavItem({
+  icon,
+  label,
+  count,
+  active,
+  onClick
+}: {
+  icon: ReactNode
+  label: string
+  count?: number
+  active: boolean
+  onClick: () => void
+}): ReactNode {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        'mb-0.5 flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] font-semibold',
+        active ? 'bg-accent-dim text-ink' : 'text-ink-soft hover:bg-bg-hover hover:text-ink'
+      )}
+    >
+      <span className={active ? 'text-accent' : 'text-ink-faint'}>{icon}</span>
+      <span className="flex-1">{label}</span>
+      {count ? <span className="text-[11px] text-ink-faint">{count}</span> : null}
+    </button>
+  )
+}
+
+// ---- Branch / tags tree ----
+
+function BranchTree({
+  status,
+  filter,
+  onCheckout,
+  onCheckoutRemote,
+  onMerge,
+  onContext,
+  onSelectTag,
+  graph
+}: {
+  status: GitStatus
+  filter: string
+  onCheckout: (b: string) => void
+  onCheckoutRemote: (b: string) => void
+  onMerge: (source: string, into: string) => void
+  onContext: (e: MouseEvent, branch: string, remote: boolean) => void
+  onSelectTag: (hash: string) => void
+  graph: GitGraphCommit[]
+}): ReactNode {
+  const dragRef = useRef<string | null>(null)
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const [open, setOpen] = useState({ branches: true, remotes: true, tags: false })
+
+  const ql = filter.toLowerCase().trim()
+  const match = (s: string): boolean => !ql || s.toLowerCase().includes(ql)
+  const locals = status.branches.filter(match)
+  const remotes = status.remoteBranches.filter((b) => !b.includes('->')).filter(match)
+  const tags = status.tags.filter(match)
+
+  const tagHash = (t: string): string | undefined =>
+    graph.find((c) => c.refs.some((r) => r === `tag: ${t}`))?.hash
+
+  const branchRow = (b: string, remote: boolean): ReactNode => {
+    const current = !remote && b === status.branch
+    return (
+      <div
+        key={(remote ? 'r:' : 'l:') + b}
+        draggable
+        onDragStart={(e) => {
+          dragRef.current = b
+          e.dataTransfer.effectAllowed = 'move'
+          e.dataTransfer.setData('text/plain', b)
+        }}
+        onDragOver={
+          remote
+            ? undefined
+            : (e) => {
+                e.preventDefault()
+                if (dragRef.current && dragRef.current !== b) setDropTarget(b)
+              }
+        }
+        onDragLeave={remote ? undefined : () => setDropTarget((t) => (t === b ? null : t))}
+        onDrop={
+          remote
+            ? undefined
+            : (e) => {
+                e.preventDefault()
+                const src = dragRef.current
+                dragRef.current = null
+                setDropTarget(null)
+                if (src && src !== b) onMerge(src, b)
+              }
+        }
+        onDoubleClick={() => (remote ? onCheckoutRemote(b) : onCheckout(b))}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          onContext(e, b, remote)
+        }}
+        title={remote ? `${b} — double-click to check out` : `${b} — double-click to check out, drag onto another branch to merge`}
+        className={cn(
+          'group flex cursor-pointer items-center gap-1.5 rounded-md py-[3px] pl-6 pr-2 text-[12px]',
+          dropTarget === b
+            ? 'bg-accent/20 ring-1 ring-accent'
+            : current
+              ? 'bg-accent-dim text-ink'
+              : 'text-ink-soft hover:bg-bg-hover hover:text-ink'
+        )}
+      >
+        {current ? (
+          <Check size={12} className="shrink-0 text-accent" />
+        ) : (
+          <GitBranch size={12} className={cn('shrink-0', remote ? 'text-ink-faint/60' : 'text-ink-faint')} />
+        )}
+        <span className={cn('min-w-0 flex-1 truncate', current && 'font-bold')}>{b}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="select-none text-[13px]">
+      <TreeSection
+        label="Branches"
+        count={status.branches.length}
+        open={open.branches}
+        onToggle={() => setOpen((o) => ({ ...o, branches: !o.branches }))}
+      >
+        {locals.length ? locals.map((b) => branchRow(b, false)) : <Empty />}
+      </TreeSection>
+
+      <TreeSection
+        label="Remotes"
+        count={remotes.length}
+        open={open.remotes}
+        onToggle={() => setOpen((o) => ({ ...o, remotes: !o.remotes }))}
+      >
+        {remotes.length ? remotes.map((b) => branchRow(b, true)) : <Empty />}
+      </TreeSection>
+
+      <TreeSection
+        label="Tags"
+        count={status.tags.length}
+        open={open.tags}
+        onToggle={() => setOpen((o) => ({ ...o, tags: !o.tags }))}
+      >
+        {tags.length ? (
+          tags.map((t) => {
+            const h = tagHash(t)
+            return (
+              <div
+                key={t}
+                onClick={() => h && onSelectTag(h)}
+                className="flex cursor-pointer items-center gap-1.5 rounded-md py-[3px] pl-6 pr-2 text-[12px] text-ink-soft hover:bg-bg-hover hover:text-ink"
+              >
+                <Tag size={12} className="shrink-0 text-warn" />
+                <span className="min-w-0 flex-1 truncate">{t}</span>
+              </div>
+            )
+          })
+        ) : (
+          <Empty />
+        )}
+      </TreeSection>
+    </div>
+  )
+}
+
+function TreeSection({
+  label,
+  count,
+  open,
+  onToggle,
+  children
+}: {
+  label: string
+  count: number
+  open: boolean
+  onToggle: () => void
+  children: ReactNode
+}): ReactNode {
+  return (
+    <div className="mb-1">
+      <button
+        onClick={onToggle}
+        className="flex w-full items-center gap-1 px-2 py-1 text-[11px] font-bold uppercase tracking-wider text-ink-faint hover:text-ink-soft"
+      >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        {label}
+        <span className="ml-auto font-medium normal-case">{count}</span>
+      </button>
+      {open && <div className="px-2">{children}</div>}
+    </div>
+  )
+}
+
+function Empty(): ReactNode {
+  return <div className="px-6 py-1 text-[11px] text-ink-faint">None</div>
+}
+
+// ---- Local Changes view ----
+
+function LocalChangesView({
+  path,
+  status,
+  busy,
+  run
+}: {
+  path: string
+  status: GitStatus | null
+  busy: boolean
+  run: (fn: () => Promise<{ ok: boolean; error?: string }>, okMsg?: string) => Promise<void>
+}): ReactNode {
+  const [sel, setSel] = useState<{ file: string; staged: boolean; untracked: boolean } | null>(null)
+  const [diff, setDiff] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState('')
+
+  const unstaged = status?.unstaged ?? []
+  const staged = status?.staged ?? []
+
+  // Keep the current selection valid as files change.
+  useEffect(() => {
+    if (!sel) return
+    const list = sel.staged ? staged : unstaged
+    if (!list.some((f) => f.path === sel.file)) setSel(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status])
+
+  useEffect(() => {
+    if (!sel) {
+      setDiff(null)
+      return
+    }
+    let cancel = false
+    setLoading(true)
+    window.api.git
+      .diff(path, { file: sel.file, staged: sel.staged, untracked: sel.untracked })
+      .then((r) => {
+        if (cancel) return
+        setLoading(false)
+        setDiff(r.ok ? r.data ?? '' : `Error: ${r.error}`)
+      })
+    return () => {
+      cancel = true
+    }
+  }, [path, sel])
+
+  const doCommit = (push: boolean): void => {
+    const msg = message.trim()
+    if (!msg) return
+    run(async () => {
+      const c = await window.api.git.commit(path, msg)
+      if (!c.ok) return c
+      if (push) {
+        const p = await window.api.git.push(path)
+        if (!p.ok) return p
+      }
+      setMessage('')
+      return { ok: true }
+    }, push ? 'Committed & pushed' : 'Committed')
+  }
+
+  return (
+    <div className="flex h-full">
+      {/* lists + commit box */}
+      <div className="flex w-[340px] shrink-0 flex-col border-r border-line">
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <ChangeList
+            title="Unstaged"
+            files={unstaged}
+            actionLabel="Stage"
+            onAction={(files) => run(() => window.api.git.stage(path, files))}
+            onAll={unstaged.length ? () => run(() => window.api.git.stageAll(path)) : undefined}
+            allLabel="Stage all"
+            secondaryLabel="Discard"
+            onSecondary={(files) =>
+              confirm(`Discard changes to ${files.join(', ')}?`) &&
+              run(() => window.api.git.discard(path, files))
+            }
+            selectedFile={sel && !sel.staged ? sel.file : null}
+            onSelect={(f) => setSel({ file: f.path, staged: false, untracked: f.code === '?' })}
+          />
+          <ChangeList
+            title="Staged"
+            files={staged}
+            actionLabel="Unstage"
+            onAction={(files) => run(() => window.api.git.unstage(path, files))}
+            onAll={staged.length ? () => run(() => window.api.git.unstageAll(path)) : undefined}
+            allLabel="Unstage all"
+            selectedFile={sel && sel.staged ? sel.file : null}
+            onSelect={(f) => setSel({ file: f.path, staged: true, untracked: false })}
+          />
+        </div>
+        <div className="border-t border-line p-2.5">
+          <input
+            className="field-input mb-1.5"
+            placeholder="Commit subject"
+            value={message.split('\n')[0]}
+            onChange={(e) => {
+              const rest = message.includes('\n') ? '\n' + message.split('\n').slice(1).join('\n') : ''
+              setMessage(e.target.value + rest)
+            }}
+          />
+          <textarea
+            className="field-input mb-2 min-h-[44px] resize-none text-[12px]"
+            placeholder="Description"
+            value={message.includes('\n') ? message.split('\n').slice(1).join('\n') : ''}
+            onChange={(e) => setMessage(message.split('\n')[0] + '\n' + e.target.value)}
+          />
+          <div className="flex gap-2">
+            <Button className="flex-1" disabled={!message.trim() || !staged.length || busy} onClick={() => doCommit(false)}>
+              Commit
+            </Button>
+            <Button
+              variant="ghost"
+              className="flex-1"
+              disabled={!message.trim() || !staged.length || busy}
+              onClick={() => doCommit(true)}
+            >
+              Commit & Push
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* diff */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="truncate border-b border-line bg-bg-panel px-3 py-1.5 font-mono text-[11px] text-ink-soft">
+          {sel ? sel.file : 'No file selected'}
+        </div>
+        <div className="min-h-0 flex-1">
+          <DiffView diff={diff} loading={loading} empty="Select a changed file to view its diff." />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ChangeList({
+  title,
+  files,
+  actionLabel,
+  onAction,
+  onAll,
+  allLabel,
+  secondaryLabel,
+  onSecondary,
+  selectedFile,
+  onSelect
+}: {
+  title: string
+  files: GitFile[]
+  actionLabel: string
+  onAction: (files: string[]) => void
+  onAll?: () => void
+  allLabel: string
+  secondaryLabel?: string
+  onSecondary?: (files: string[]) => void
+  selectedFile: string | null
+  onSelect: (f: GitFile) => void
+}): ReactNode {
+  return (
+    <div>
+      <div className="sticky top-0 z-10 flex items-center justify-between bg-bg-panel px-3 py-1.5">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-ink-faint">
+          {title} {files.length > 0 && <span className="text-ink-soft">({files.length})</span>}
+        </span>
+        {onAll && (
+          <button className="text-[11px] font-semibold text-accent hover:text-accent-hover" onClick={onAll}>
+            {allLabel}
+          </button>
+        )}
+      </div>
+      {files.length === 0 ? (
+        <div className="px-3 pb-2 text-[11px] text-ink-faint">Nothing here.</div>
+      ) : (
+        files.map((f) => {
+          const { dir, name } = splitPath(f.path)
+          return (
+            <div
+              key={f.path}
+              onClick={() => onSelect(f)}
+              className={cn(
+                'group flex cursor-pointer items-center gap-2 px-3 py-1',
+                selectedFile === f.path ? 'bg-accent-dim' : 'hover:bg-bg-hover'
+              )}
+            >
+              <span
+                className="w-3 shrink-0 text-center font-mono text-xs font-bold"
+                style={{ color: CODE_COLOR[f.code] ?? '#9aa1ad' }}
+              >
+                {codeLetter(f.code)}
+              </span>
+              <span className="min-w-0 flex-1 truncate font-mono text-xs" title={f.path}>
+                {name}
+                {dir && <span className="text-ink-faint"> · {dir}</span>}
+              </span>
+              <div className="flex shrink-0 gap-1 opacity-0 group-hover:opacity-100">
+                {secondaryLabel && onSecondary && (
+                  <button
+                    className="rounded px-1.5 py-0.5 text-[11px] font-semibold text-ink-soft hover:bg-bg-hover hover:text-bad"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onSecondary([f.path])
+                    }}
+                  >
+                    {secondaryLabel}
+                  </button>
+                )}
+                <button
+                  className="rounded px-1.5 py-0.5 text-[11px] font-semibold text-accent hover:bg-bg-hover"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onAction([f.path])
+                  }}
+                >
+                  {actionLabel}
+                </button>
+              </div>
+            </div>
+          )
+        })
+      )}
+    </div>
+  )
+}
+
+// ---- All Commits view ----
+
+function CommitsView({
+  path,
+  commits,
+  selHash,
+  onSelect,
+  onDoubleSelect,
+  onContext,
+  onTag,
+  commit
+}: {
+  path: string
+  commits: GitGraphCommit[]
+  selHash: string | null
+  onSelect: (hash: string) => void
+  onDoubleSelect: (c: GitGraphCommit) => void
+  onContext: (e: MouseEvent, c: GitGraphCommit) => void
+  onTag: (c: TagTarget) => void
+  commit: GitGraphCommit | null
+}): ReactNode {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-[1_1_56%] overflow-auto border-b border-line">
+        <GraphView
+          commits={commits}
+          selectedHash={selHash}
+          onSelect={onSelect}
+          onDoubleSelect={onDoubleSelect}
+          onContext={onContext}
+          onTag={onTag}
+        />
+      </div>
+      <div className="min-h-0 flex-[1_1_44%]">
+        <CommitDetail path={path} commit={commit} />
+      </div>
+    </div>
+  )
+}
+
+function CommitDetail({ path, commit }: { path: string; commit: GitGraphCommit | null }): ReactNode {
+  const [tab, setTab] = useState<'commit' | 'changes' | 'tree'>('changes')
+  const [files, setFiles] = useState<GitFile[]>([])
+  const [selFile, setSelFile] = useState<string | null>(null)
+  const [diff, setDiff] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const hash = commit?.hash
+
+  useEffect(() => {
+    setFiles([])
+    setSelFile(null)
+    setDiff(null)
+    if (!hash) return
+    let cancel = false
+    window.api.git.commitFiles(path, hash).then((r) => {
+      if (cancel) return
+      if (r.ok && r.data) {
+        setFiles(r.data)
+        setSelFile(r.data[0]?.path ?? null)
+      }
+    })
+    return () => {
+      cancel = true
+    }
+  }, [path, hash])
+
+  useEffect(() => {
+    if (!hash || !selFile) {
+      setDiff(null)
+      return
+    }
+    let cancel = false
+    setLoading(true)
+    window.api.git.diff(path, { hash, file: selFile }).then((r) => {
+      if (cancel) return
+      setLoading(false)
+      setDiff(r.ok ? r.data ?? '' : `Error: ${r.error}`)
+    })
+    return () => {
+      cancel = true
+    }
+  }, [path, hash, selFile])
+
+  if (!commit)
+    return (
+      <div className="flex h-full items-center justify-center text-xs text-ink-faint">
+        Select a commit to see its details.
+      </div>
+    )
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-1 border-b border-line px-2">
+        <DetailTab id="commit" active={tab} onClick={setTab}>
+          Commit
+        </DetailTab>
+        <DetailTab id="changes" active={tab} onClick={setTab}>
+          Changes ({files.length})
+        </DetailTab>
+        <DetailTab id="tree" active={tab} onClick={setTab}>
+          File Tree
+        </DetailTab>
+      </div>
+      <div className="min-h-0 flex-1">
+        {tab === 'commit' ? (
+          <CommitMeta commit={commit} />
+        ) : (
+          <div className="flex h-full">
+            <div className="w-[280px] shrink-0 overflow-y-auto border-r border-line">
+              {tab === 'changes' ? (
+                <FlatFiles files={files} selFile={selFile} onSelect={setSelFile} />
+              ) : (
+                <TreeFiles files={files} selFile={selFile} onSelect={setSelFile} />
+              )}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col">
+              <div className="truncate border-b border-line bg-bg-panel px-3 py-1.5 font-mono text-[11px] text-ink-soft">
+                {selFile ?? '—'}
+              </div>
+              <div className="min-h-0 flex-1">
+                <DiffView diff={diff} loading={loading} />
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DetailTab({
+  id,
+  active,
+  onClick,
+  children
+}: {
+  id: 'commit' | 'changes' | 'tree'
+  active: string
+  onClick: (id: 'commit' | 'changes' | 'tree') => void
+  children: ReactNode
+}): ReactNode {
+  return (
+    <button
+      onClick={() => onClick(id)}
+      className={cn(
+        'border-b-2 px-3 py-2 text-[12px] font-semibold transition-colors',
+        active === id ? 'border-accent text-ink' : 'border-transparent text-ink-soft hover:text-ink'
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
+function CommitMeta({ commit }: { commit: GitGraphCommit }): ReactNode {
+  return (
+    <div className="h-full overflow-y-auto p-4 text-[12px]">
+      <div className="mb-3 text-[15px] font-semibold">{commit.message}</div>
+      {commit.body && (
+        <pre className="mb-3 whitespace-pre-wrap font-mono text-[12px] text-ink-soft">{commit.body}</pre>
+      )}
+      <dl className="space-y-1.5">
+        <Meta label="Author">
+          {commit.author} {commit.email && <span className="text-ink-faint">&lt;{commit.email}&gt;</span>}
+        </Meta>
+        <Meta label="Date">
+          {commit.date ? new Date(commit.date).toLocaleString() : '—'}{' '}
+          <span className="text-ink-faint">({commit.relative})</span>
+        </Meta>
+        <Meta label="SHA">
+          <span className="font-mono text-accent">{commit.hash}</span>
+        </Meta>
+        <Meta label="Parents">
+          {commit.parents.length ? (
+            <span className="font-mono text-ink-soft">{commit.parents.map((p) => p.slice(0, 7)).join('  ')}</span>
+          ) : (
+            <span className="text-ink-faint">(root commit)</span>
+          )}
+        </Meta>
+        {commit.refs.length > 0 && (
+          <Meta label="Refs">
+            <span className="flex flex-wrap gap-1">
+              {commit.refs.map((r) => (
+                <RefChip key={r} name={r} />
+              ))}
+            </span>
+          </Meta>
+        )}
+      </dl>
+    </div>
+  )
+}
+
+function Meta({ label, children }: { label: string; children: ReactNode }): ReactNode {
+  return (
+    <div className="flex gap-2">
+      <dt className="w-16 shrink-0 text-[11px] font-bold uppercase tracking-wide text-ink-faint">{label}</dt>
+      <dd className="min-w-0 flex-1 break-words">{children}</dd>
+    </div>
+  )
+}
+
+function FlatFiles({
+  files,
+  selFile,
+  onSelect
+}: {
+  files: GitFile[]
+  selFile: string | null
+  onSelect: (f: string) => void
+}): ReactNode {
+  if (files.length === 0) return <div className="p-3 text-xs text-ink-faint">No file changes.</div>
+  return (
+    <div className="py-1">
+      {files.map((f) => {
+        const { dir, name } = splitPath(f.path)
+        return (
+          <button
+            key={f.path}
+            onClick={() => onSelect(f.path)}
+            className={cn(
+              'flex w-full items-center gap-2 px-3 py-1 text-left',
+              selFile === f.path ? 'bg-accent-dim' : 'hover:bg-bg-hover'
+            )}
+          >
+            <span
+              className="w-3 shrink-0 text-center font-mono text-xs font-bold"
+              style={{ color: CODE_COLOR[f.code] ?? '#9aa1ad' }}
+            >
+              {codeLetter(f.code)}
+            </span>
+            <span className="min-w-0 flex-1 truncate font-mono text-xs" title={f.path}>
+              {name}
+              {dir && <span className="text-ink-faint"> · {dir}</span>}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function TreeFiles({
+  files,
+  selFile,
+  onSelect
+}: {
+  files: GitFile[]
+  selFile: string | null
+  onSelect: (f: string) => void
+}): ReactNode {
+  const groups = useMemo(() => {
+    const map = new Map<string, GitFile[]>()
+    for (const f of files) {
+      const { dir } = splitPath(f.path)
+      const key = dir || '.'
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push(f)
+    }
+    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+  }, [files])
+
+  if (files.length === 0) return <div className="p-3 text-xs text-ink-faint">No file changes.</div>
+  return (
+    <div className="py-1 text-[12px]">
+      {groups.map(([dir, list]) => (
+        <div key={dir} className="mb-1">
+          <div className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-semibold text-ink-faint">
+            <FolderTree size={12} />
+            <span className="truncate" title={dir}>
+              {dir}
+            </span>
+          </div>
+          {list.map((f) => {
+            const { name } = splitPath(f.path)
+            return (
+              <button
+                key={f.path}
+                onClick={() => onSelect(f.path)}
+                className={cn(
+                  'flex w-full items-center gap-2 py-1 pl-7 pr-3 text-left',
+                  selFile === f.path ? 'bg-accent-dim' : 'hover:bg-bg-hover'
+                )}
+              >
+                <span
+                  className="w-3 shrink-0 text-center font-mono text-xs font-bold"
+                  style={{ color: CODE_COLOR[f.code] ?? '#9aa1ad' }}
+                >
+                  {codeLetter(f.code)}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-mono text-xs" title={f.path}>
+                  {name}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ---- Context menu ----
+
+interface MenuItem {
+  label: string
+  onClick: () => void
+  danger?: boolean
+}
+function ContextMenu({
+  x,
+  y,
+  items,
+  onClose
+}: {
+  x: number
+  y: number
+  items: MenuItem[]
+  onClose: () => void
+}): ReactNode {
+  return (
+    <>
+      <div
+        className="fixed inset-0 z-40"
+        onClick={onClose}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          onClose()
+        }}
+      />
+      <div
+        className="fixed z-50 min-w-[200px] overflow-hidden rounded-lg border border-line bg-bg-panel py-1 shadow-2xl"
+        style={{ left: x, top: y }}
+      >
+        {items.map((it) => (
+          <button
+            key={it.label}
+            className={cn(
+              'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] hover:bg-bg-hover',
+              it.danger && 'text-bad'
+            )}
+            onClick={() => {
+              it.onClick()
+              onClose()
+            }}
+          >
+            {it.label === 'Copy name' && <Copy size={12} />}
+            {it.label === 'Rename…' && <Pencil size={12} />}
+            {it.label === 'Delete…' && <Trash2 size={12} />}
+            {it.label}
+          </button>
+        ))}
+      </div>
+    </>
+  )
+}
+
+// ---- Merge options dialog (drag-drop result) ----
+
+const MERGE_MODES: { id: MergeMode; label: string; desc: string; flag?: string }[] = [
+  { id: 'default', label: 'Default', desc: 'Fast-forward if possible' },
+  { id: 'no-ff', label: 'No Fast-Forward', desc: 'Always create a merge commit', flag: '--no-ff' },
+  { id: 'squash', label: 'Squash', desc: 'Squash merge', flag: '--squash' },
+  { id: 'no-commit', label: "Don't Commit", desc: 'Merge without commit', flag: '--no-commit' }
+]
+
+function MergeOptionsDialog({
+  source,
+  into,
+  onClose,
+  onMerge
+}: {
+  source: string
+  into: string
+  onClose: () => void
+  onMerge: (mode: MergeMode) => void
+}): ReactNode {
+  const [mode, setMode] = useState<MergeMode>('default')
+  return (
+    <Modal title="Merge Branch" width={460} onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-xs text-ink-faint">Merge one branch into another.</p>
+        <div className="space-y-1.5 text-[13px]">
+          <div className="flex items-center gap-2">
+            <span className="w-12 text-ink-faint">Merge</span>
+            <GitBranch size={13} className="text-accent" />
+            <span className="font-semibold">{source}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-12 text-ink-faint">Into</span>
+            <GitBranch size={13} className="text-accent" />
+            <span className="font-semibold">{into}</span>
+          </div>
+        </div>
+        <Field label="Merge option">
+          <select className="field-input" value={mode} onChange={(e) => setMode(e.target.value as MergeMode)}>
+            {MERGE_MODES.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label} — {m.desc}
+                {m.flag ? `  (${m.flag})` : ''}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={() => onMerge(mode)}>Merge</Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function TextPromptModal({
+  title,
+  label,
+  initial,
+  confirmLabel,
+  onClose,
+  onSubmit
+}: {
+  title: string
+  label: string
+  initial: string
+  confirmLabel: string
+  onClose: () => void
+  onSubmit: (v: string) => void
+}): ReactNode {
+  const [v, setV] = useState(initial)
+  return (
+    <Modal title={title} width={420} onClose={onClose}>
+      <div className="space-y-3">
+        <Field label={label}>
+          <Input
+            autoFocus
+            value={v}
+            onChange={(e) => setV(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && v.trim()) onSubmit(v.trim())
+            }}
+          />
+        </Field>
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button disabled={!v.trim()} onClick={() => onSubmit(v.trim())}>
+            {confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================================================
+// Add repository dialog (existing folder vs clone).
+// ============================================================================
+function deriveRepoName(url: string): string {
+  const cleaned = url.trim().replace(/\.git$/i, '').replace(/[/\\]+$/, '')
+  return cleaned.split(/[/:\\]/).filter(Boolean).pop() ?? ''
+}
+
 function AddRepoDialog({
   onClose,
   onPickExisting,
@@ -251,7 +1600,6 @@ function AddRepoDialog({
     const r = await onClone(url.trim(), directory.trim(), name.trim())
     setBusy(false)
     if (!r.ok) setError(r.error ?? 'Clone failed.')
-    // On success the parent closes this dialog.
   }
 
   return (
@@ -354,426 +1702,6 @@ function AddRepoDialog({
   )
 }
 
-/** Inner panel: the full Git UI for a single repository path. */
-function RepoView({ path, onPickFolder }: { path: string; onPickFolder: () => void }): ReactNode {
-  const [status, setStatus] = useState<GitStatus | null>(null)
-  const [log, setLog] = useState<GitCommit[]>([])
-  const [graph, setGraph] = useState<GitGraphCommit[]>([])
-  const [message, setMessage] = useState('')
-  const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [histTab, setHistTab] = useState<HistTab>('commits')
-  const [mergeOpen, setMergeOpen] = useState(false)
-  const [tagFor, setTagFor] = useState<TagTarget | null>(null)
-
-  const refresh = useCallback(async () => {
-    if (!path) return
-    const [st, lg, gr] = await Promise.all([
-      window.api.git.status(path),
-      window.api.git.log(path),
-      window.api.git.graphLog(path)
-    ])
-    if (st.ok && st.data) setStatus(st.data)
-    if (lg.ok && lg.data) setLog(lg.data)
-    if (gr.ok && gr.data) setGraph(gr.data)
-  }, [path])
-
-  useEffect(() => {
-    refresh()
-  }, [refresh])
-
-  const run = async (
-    fn: () => Promise<{ ok: boolean; error?: string }>,
-    okMsg?: string
-  ): Promise<void> => {
-    setBusy(true)
-    setNote(null)
-    const r = await fn()
-    setBusy(false)
-    if (!r.ok) setNote({ text: r.error ?? 'Failed', bad: true })
-    else if (okMsg) setNote({ text: okMsg })
-    await refresh()
-  }
-
-  if (!path) {
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-        <FolderGit2 size={44} className="text-ink-faint" />
-        <div className="text-[15px] font-semibold text-ink-soft">No repository folder set</div>
-        <Button onClick={onPickFolder}>
-          <FolderOpen size={16} /> Choose repository folder
-        </Button>
-      </div>
-    )
-  }
-
-  if (status && !status.isRepo) {
-    const missing = !status.exists
-    return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-        <FolderGit2 size={44} className="text-ink-faint" />
-        <div className="text-[15px] font-semibold text-ink-soft">
-          {missing ? 'Repository folder not found' : 'Not a Git repository'}
-        </div>
-        <div className="max-w-md break-all text-xs text-ink-faint">{path}</div>
-        {missing && (
-          <p className="max-w-sm text-xs text-ink-faint">
-            The folder may have been moved or deleted. Your SSH servers and databases for this
-            project are still saved — just point the repository to its new location.
-          </p>
-        )}
-        <Button onClick={onPickFolder}>
-          {missing ? (
-            <>
-              <FolderSearch size={16} /> Locate folder
-            </>
-          ) : (
-            <>
-              <FolderOpen size={16} /> Change folder
-            </>
-          )}
-        </Button>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="flex items-center gap-2 border-b border-line bg-bg-panel px-4 py-2.5">
-        <GitBranch size={15} className="text-accent" />
-        {status && (
-          <BranchPicker
-            status={status}
-            onPick={(value, isLocal) =>
-              isLocal
-                ? run(() => window.api.git.checkout(path, value), `Switched to ${value}`)
-                : run(() => window.api.git.checkoutRemote(path, value), `Checked out ${value}`)
-            }
-          />
-        )}
-        {status && (status.ahead > 0 || status.behind > 0) && (
-          <span className="flex items-center gap-2 text-xs text-ink-soft">
-            {status.ahead > 0 && (
-              <span className="flex items-center gap-0.5">
-                <ArrowUp size={12} />
-                {status.ahead}
-              </span>
-            )}
-            {status.behind > 0 && (
-              <span className="flex items-center gap-0.5">
-                <ArrowDown size={12} />
-                {status.behind}
-              </span>
-            )}
-          </span>
-        )}
-
-        <div className="ml-auto flex items-center gap-1.5">
-          {busy && <Spinner />}
-          <Button size="sm" variant="ghost" onClick={() => run(() => window.api.git.fetch(path), 'Fetched')}>
-            <RefreshCw size={13} /> Fetch
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => run(() => window.api.git.pull(path), 'Pulled')}>
-            <ArrowDown size={13} /> Pull
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => run(() => window.api.git.push(path), 'Pushed')}>
-            <ArrowUp size={13} /> Push
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => setMergeOpen(true)}>
-            <GitMerge size={13} /> Merge
-          </Button>
-        </div>
-      </div>
-
-      {/* Open-in bar */}
-      <div className="flex items-center gap-1.5 border-b border-line px-4 py-1.5 text-[11px] text-ink-faint">
-        <span className="font-semibold">Open in:</span>
-        {EDITORS.map((ed) => (
-          <button
-            key={ed.label}
-            className="flex items-center gap-1 rounded-md px-1.5 py-0.5 hover:bg-bg-hover hover:text-ink"
-            onClick={() =>
-              ed.command ? window.api.app.openEditor(ed.command, path) : window.api.app.openPath(path)
-            }
-          >
-            {ed.label === 'Explorer' ? <FolderOpen size={12} /> : <ExternalLink size={12} />}
-            {ed.label}
-          </button>
-        ))}
-      </div>
-
-      {note && (
-        <div className={cn('px-4 py-1.5 text-xs', note.bad ? 'text-bad' : 'text-ok')}>{note.text}</div>
-      )}
-
-      <div className="grid min-h-0 flex-1 grid-cols-[1fr,340px]">
-        {/* Changes */}
-        <div className="flex min-h-0 flex-col overflow-y-auto border-r border-line p-4">
-          <FileSection
-            title="Unstaged changes"
-            files={status?.unstaged ?? []}
-            actionLabel="Stage"
-            onAction={(files) => run(() => window.api.git.stage(path, files))}
-            onSecondary={(files) =>
-              confirm(`Discard changes to ${files.length} file(s)?`) &&
-              run(() => window.api.git.discard(path, files))
-            }
-            secondaryLabel="Discard"
-            allLabel="Stage all"
-            onAll={() => run(() => window.api.git.stageAll(path))}
-          />
-          <div className="h-4" />
-          <FileSection
-            title="Staged changes"
-            files={status?.staged ?? []}
-            actionLabel="Unstage"
-            onAction={(files) => run(() => window.api.git.unstage(path, files))}
-            allLabel="Unstage all"
-            onAll={() => run(() => window.api.git.unstageAll(path))}
-          />
-
-          <div className="mt-4">
-            <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-ink-faint">
-              Commit message
-            </div>
-            <textarea
-              className="field-input min-h-[60px] resize-none font-mono"
-              placeholder="Describe your changes…"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) doCommit(false)
-              }}
-            />
-            <div className="mt-2 flex gap-2">
-              <Button
-                className="flex-1"
-                disabled={!message.trim() || !(status?.staged.length ?? 0)}
-                onClick={() => doCommit(false)}
-              >
-                Commit
-              </Button>
-              <Button
-                variant="ghost"
-                className="flex-1"
-                disabled={!message.trim() || !(status?.staged.length ?? 0)}
-                onClick={() => doCommit(true)}
-              >
-                Commit & Push
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        {/* History: Commits / Graph */}
-        <div className="flex min-h-0 flex-col">
-          <div className="flex items-center gap-1 border-b border-line px-2">
-            <HistoryTabButton id="commits" active={histTab} onClick={setHistTab} icon={<List size={13} />}>
-              Commits
-            </HistoryTabButton>
-            <HistoryTabButton id="graph" active={histTab} onClick={setHistTab} icon={<Network size={13} />}>
-              Graph
-            </HistoryTabButton>
-          </div>
-          <div className="min-h-0 flex-1 overflow-auto">
-            {histTab === 'commits' ? (
-              <CommitsList log={log} onTag={setTagFor} />
-            ) : (
-              <GraphView commits={graph} onTag={setTagFor} />
-            )}
-          </div>
-        </div>
-      </div>
-
-      {mergeOpen && status && (
-        <MergeDialog
-          status={status}
-          onClose={() => setMergeOpen(false)}
-          onMerge={(branch) => {
-            setMergeOpen(false)
-            run(() => window.api.git.merge(path, branch), `Merged ${branch}`)
-          }}
-        />
-      )}
-
-      {tagFor && (
-        <TagDialog
-          commit={tagFor}
-          onClose={() => setTagFor(null)}
-          onCreate={(name, msg, push) => {
-            const ref = tagFor.hash
-            setTagFor(null)
-            run(
-              () => window.api.git.addTag(path, name, { ref, message: msg || undefined, push }),
-              push ? `Created & pushed tag ${name}` : `Created tag ${name}`
-            )
-          }}
-        />
-      )}
-    </div>
-  )
-
-  async function doCommit(push: boolean): Promise<void> {
-    const msg = message.trim()
-    if (!msg) return
-    setBusy(true)
-    setNote(null)
-    const c = await window.api.git.commit(path, msg)
-    if (!c.ok) {
-      setBusy(false)
-      setNote({ text: c.error, bad: true })
-      return
-    }
-    if (push) {
-      const p = await window.api.git.push(path)
-      if (!p.ok) {
-        setBusy(false)
-        setNote({ text: p.error, bad: true })
-        await refresh()
-        return
-      }
-    }
-    setBusy(false)
-    setMessage('')
-    setNote({ text: push ? 'Committed & pushed' : 'Committed' })
-    await refresh()
-  }
-}
-
-// ---- Branch picker (searchable) ----
-
-function SearchableBranchList({
-  locals,
-  remotes,
-  current,
-  onPick,
-  autoFocus
-}: {
-  locals: string[]
-  remotes: string[]
-  current?: string
-  onPick: (value: string) => void
-  autoFocus?: boolean
-}): ReactNode {
-  const [q, setQ] = useState('')
-  const ql = q.toLowerCase().trim()
-  const fL = locals.filter((b) => b.toLowerCase().includes(ql))
-  const fR = remotes.filter((b) => b.toLowerCase().includes(ql))
-  return (
-    <div>
-      <div className="relative mb-1.5">
-        <Search size={13} className="pointer-events-none absolute left-2 top-2 text-ink-faint" />
-        <input
-          autoFocus={autoFocus}
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search branches…"
-          className="w-full rounded-md bg-bg-input py-1.5 pl-7 pr-2 text-xs outline-none placeholder:text-ink-faint focus:ring-1 focus:ring-accent"
-        />
-      </div>
-      <div className="max-h-72 overflow-y-auto">
-        {fL.length > 0 && (
-          <div className="px-2 pb-0.5 pt-1 text-[10px] font-bold uppercase tracking-wider text-ink-faint">
-            Local
-          </div>
-        )}
-        {fL.map((b) => (
-          <button
-            key={b}
-            onClick={() => onPick(b)}
-            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] hover:bg-bg-hover"
-          >
-            <GitBranch size={12} className="shrink-0 text-ink-faint" />
-            <span className="min-w-0 flex-1 truncate">{b}</span>
-            {b === current && <Check size={12} className="shrink-0 text-accent" />}
-          </button>
-        ))}
-        {fR.length > 0 && (
-          <div className="px-2 pb-0.5 pt-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-faint">
-            Remote
-          </div>
-        )}
-        {fR.map((b) => (
-          <button
-            key={b}
-            onClick={() => onPick(b)}
-            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-ink-soft hover:bg-bg-hover"
-          >
-            <GitBranch size={12} className="shrink-0 text-ink-faint/70" />
-            <span className="min-w-0 flex-1 truncate">{b}</span>
-          </button>
-        ))}
-        {fL.length === 0 && fR.length === 0 && (
-          <div className="px-2 py-3 text-center text-xs text-ink-faint">No matching branches.</div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function BranchPicker({
-  status,
-  onPick
-}: {
-  status: GitStatus
-  onPick: (value: string, isLocal: boolean) => void
-}): ReactNode {
-  const [open, setOpen] = useState(false)
-  const remotes = status.remoteBranches.filter(
-    (rb) => !status.branches.includes(rb.replace(/^[^/]+\//, ''))
-  )
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="flex max-w-[240px] items-center gap-1.5 rounded-md border border-line bg-bg-input px-2 py-1 text-[13px] font-semibold outline-none hover:border-accent"
-      >
-        <span className="truncate">{status.branch || 'detached HEAD'}</span>
-        <ChevronDown size={13} className="shrink-0 text-ink-faint" />
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-full z-40 mt-1 w-72 rounded-lg border border-line bg-bg-panel p-1.5 shadow-xl">
-            <SearchableBranchList
-              autoFocus
-              locals={status.branches}
-              remotes={remotes}
-              current={status.branch}
-              onPick={(v) => {
-                setOpen(false)
-                onPick(v, status.branches.includes(v))
-              }}
-            />
-          </div>
-        </>
-      )}
-    </div>
-  )
-}
-
-function MergeDialog({
-  status,
-  onClose,
-  onMerge
-}: {
-  status: GitStatus
-  onClose: () => void
-  onMerge: (branch: string) => void
-}): ReactNode {
-  const locals = status.branches.filter((b) => b !== status.branch)
-  const remotes = status.remoteBranches
-  return (
-    <Modal title={`Merge into ${status.branch || 'current branch'}`} width={420} onClose={onClose}>
-      <p className="mb-2 text-xs text-ink-faint">
-        Pick a branch to merge into your current branch. Conflicts will be reported.
-      </p>
-      <SearchableBranchList autoFocus locals={locals} remotes={remotes} onPick={onMerge} />
-    </Modal>
-  )
-}
-
 function TagDialog({
   commit,
   onClose,
@@ -824,86 +1752,17 @@ function TagDialog({
   )
 }
 
-function HistoryTabButton({
-  id,
-  active,
-  onClick,
-  icon,
-  children
-}: {
-  id: HistTab
-  active: HistTab
-  onClick: (id: HistTab) => void
-  icon: ReactNode
-  children: ReactNode
-}): ReactNode {
-  return (
-    <button
-      onClick={() => onClick(id)}
-      className={cn(
-        'flex items-center gap-1.5 border-b-2 px-2.5 py-2 text-[12px] font-semibold transition-colors',
-        active === id ? 'border-accent text-ink' : 'border-transparent text-ink-soft hover:text-ink'
-      )}
-    >
-      {icon}
-      {children}
-    </button>
-  )
-}
+// ---- Branch graph (commit list) ----
 
-function CommitsList({
-  log,
-  onTag
-}: {
-  log: GitCommit[]
-  onTag: (c: TagTarget) => void
-}): ReactNode {
-  if (log.length === 0) return <div className="p-4 text-xs text-ink-faint">No commits yet.</div>
-  return (
-    <div className="space-y-1 p-3">
-      {log.map((c) => (
-        <div
-          key={c.hash}
-          className="group relative rounded-lg border border-line bg-bg-panel px-3 py-2"
-        >
-          <div className="truncate text-[13px] font-medium" title={c.message}>
-            {c.message}
-          </div>
-          <div className="mt-0.5 truncate text-[11px] text-ink-faint">
-            <span className="font-mono text-accent">{c.hash}</span> · {c.author} · {c.relative}
-          </div>
-          <button
-            title="Tag this commit"
-            onClick={() => onTag({ hash: c.hash, message: c.message })}
-            className="absolute right-2 top-2 rounded p-1 text-ink-faint opacity-0 hover:bg-bg-hover hover:text-accent group-hover:opacity-100"
-          >
-            <Tag size={13} />
-          </button>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ---- Branch graph ----
-
-const LANE_COLORS = [
-  '#6d8cff',
-  '#46c08a',
-  '#e0b341',
-  '#b07ee6',
-  '#e0625e',
-  '#56c7d6',
-  '#e0883c',
-  '#9aa1ad'
-]
+const LANE_COLORS = ['#6d8cff', '#46c08a', '#e0b341', '#b07ee6', '#e0625e', '#56c7d6', '#e0883c', '#9aa1ad']
 const ROW_H = 30
 const LANE_W = 14
 const PAD_X = 14
 const NODE_R = 4
 
 const colX = (i: number): number => PAD_X + i * LANE_W
-const laneColor = (i: number): string => LANE_COLORS[((i % LANE_COLORS.length) + LANE_COLORS.length) % LANE_COLORS.length]
+const laneColor = (i: number): string =>
+  LANE_COLORS[((i % LANE_COLORS.length) + LANE_COLORS.length) % LANE_COLORS.length]
 
 interface Seg {
   x1: number
@@ -920,7 +1779,12 @@ interface GraphRow {
   color: string
 }
 
-function buildGraph(commits: GitGraphCommit[]): { rows: GraphRow[]; segments: Seg[]; width: number; height: number } {
+function buildGraph(commits: GitGraphCommit[]): {
+  rows: GraphRow[]
+  segments: Seg[]
+  width: number
+  height: number
+} {
   const lanes: (string | null)[] = []
   const segments: Seg[] = []
   let maxCols = 1
@@ -969,16 +1833,12 @@ function buildGraph(commits: GitGraphCommit[]): { rows: GraphRow[]; segments: Se
     const after = lanes.slice()
     maxCols = Math.max(maxCols, before.length, after.length)
 
-    // pass-through lanes (unchanged, non-null) -> full-height vertical
     const n = Math.max(before.length, after.length)
     for (let i = 0; i < n; i++) {
       if (before[i] != null && after[i] === before[i]) line(colX(i), yTop, colX(i), yBot, i)
     }
-    // incoming line straight into the node
     if (before[col] === c.hash) line(colX(col), yTop, colX(col), yMid, col)
-    // other children lanes converging into this commit
     for (const m of incoming) if (m !== col) line(colX(m), yTop, colX(col), yMid, m)
-    // node down to each parent's lane
     parentCols.forEach((pc) => line(colX(col), yMid, colX(pc), yBot, pc))
 
     return { commit: c, col, cx: colX(col), cy: yMid, color: laneColor(col) }
@@ -996,11 +1856,7 @@ function RefChip({ name }: { name: string }): ReactNode {
     <span
       className={cn(
         'inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-px text-[9px] font-bold',
-        isTag
-          ? 'bg-warn/15 text-warn'
-          : remote
-            ? 'bg-bg-elevated text-ink-faint'
-            : 'bg-accent-dim text-accent-hover'
+        isTag ? 'bg-warn/15 text-warn' : remote ? 'bg-bg-elevated text-ink-faint' : 'bg-accent-dim text-accent-hover'
       )}
       title={name}
     >
@@ -1012,14 +1868,21 @@ function RefChip({ name }: { name: string }): ReactNode {
 
 function GraphView({
   commits,
+  selectedHash,
+  onSelect,
+  onDoubleSelect,
+  onContext,
   onTag
 }: {
   commits: GitGraphCommit[]
+  selectedHash: string | null
+  onSelect: (hash: string) => void
+  onDoubleSelect: (c: GitGraphCommit) => void
+  onContext: (e: MouseEvent, c: GitGraphCommit) => void
   onTag: (c: TagTarget) => void
 }): ReactNode {
   const { rows, segments, width, height } = useMemo(() => buildGraph(commits), [commits])
-  if (commits.length === 0)
-    return <div className="p-4 text-xs text-ink-faint">No commits to graph.</div>
+  if (commits.length === 0) return <div className="p-4 text-xs text-ink-faint">No commits to show.</div>
   return (
     <div className="flex text-[12px]" style={{ minHeight: height }}>
       <svg width={width} height={height} className="shrink-0">
@@ -1042,11 +1905,22 @@ function GraphView({
       <div className="min-w-0 flex-1">
         {rows.map((row, i) => {
           const short = row.commit.hash.slice(0, 7)
+          const selected = row.commit.hash === selectedHash
           return (
             <div
               key={i}
               style={{ height: ROW_H }}
-              className="group flex items-center gap-1.5 px-2 hover:bg-bg-hover/40"
+              onClick={() => onSelect(row.commit.hash)}
+              onDoubleClick={() => onDoubleSelect(row.commit)}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                onSelect(row.commit.hash)
+                onContext(e, row.commit)
+              }}
+              className={cn(
+                'group flex cursor-pointer items-center gap-1.5 px-2',
+                selected ? 'bg-accent-dim' : 'hover:bg-bg-hover/40'
+              )}
             >
               {row.commit.refs.map((r) => (
                 <RefChip key={r} name={r} />
@@ -1056,90 +1930,20 @@ function GraphView({
               </span>
               <button
                 title="Tag this commit"
-                onClick={() => onTag({ hash: short, message: row.commit.message })}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onTag({ hash: short, message: row.commit.message })
+                }}
                 className="shrink-0 rounded p-0.5 text-ink-faint opacity-0 hover:text-accent group-hover:opacity-100"
               >
                 <Tag size={12} />
               </button>
               <span className="shrink-0 font-mono text-[10px] text-ink-faint">
-                {short} · {row.commit.relative}
+                {short} · {row.commit.author} · {row.commit.relative}
               </span>
             </div>
           )
         })}
-      </div>
-    </div>
-  )
-}
-
-function FileSection({
-  title,
-  files,
-  actionLabel,
-  onAction,
-  secondaryLabel,
-  onSecondary,
-  allLabel,
-  onAll
-}: {
-  title: string
-  files: GitFile[]
-  actionLabel: string
-  onAction: (files: string[]) => void
-  secondaryLabel?: string
-  onSecondary?: (files: string[]) => void
-  allLabel: string
-  onAll: () => void
-}): ReactNode {
-  return (
-    <div>
-      <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-[11px] font-bold uppercase tracking-wider text-ink-faint">
-          {title} {files.length > 0 && <span className="text-ink-soft">({files.length})</span>}
-        </span>
-        {files.length > 0 && (
-          <button className="text-[11px] font-semibold text-accent hover:text-accent-hover" onClick={onAll}>
-            {allLabel}
-          </button>
-        )}
-      </div>
-      <div className="rounded-lg border border-line bg-bg-panel">
-        {files.length === 0 ? (
-          <div className="px-3 py-3 text-xs text-ink-faint">Nothing here.</div>
-        ) : (
-          files.map((f) => (
-            <div
-              key={f.path}
-              className="group flex items-center gap-2 border-b border-line/60 px-3 py-1.5 last:border-0"
-            >
-              <span
-                className="w-3 shrink-0 text-center font-mono text-xs font-bold"
-                style={{ color: CODE_COLOR[f.code] ?? '#9aa1ad' }}
-              >
-                {f.code === '?' ? 'U' : f.code}
-              </span>
-              <span className="min-w-0 flex-1 truncate font-mono text-xs" title={f.path}>
-                {f.path}
-              </span>
-              <div className="flex shrink-0 gap-1 opacity-0 group-hover:opacity-100">
-                {secondaryLabel && onSecondary && (
-                  <button
-                    className="rounded px-1.5 py-0.5 text-[11px] font-semibold text-ink-soft hover:bg-bg-hover hover:text-bad"
-                    onClick={() => onSecondary([f.path])}
-                  >
-                    {secondaryLabel}
-                  </button>
-                )}
-                <button
-                  className="rounded px-1.5 py-0.5 text-[11px] font-semibold text-accent hover:bg-bg-hover"
-                  onClick={() => onAction([f.path])}
-                >
-                  {actionLabel}
-                </button>
-              </div>
-            </div>
-          ))
-        )}
       </div>
     </div>
   )

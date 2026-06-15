@@ -9,6 +9,8 @@ import type {
   GitStatus,
   GitCommit,
   GitGraphCommit,
+  GitFile,
+  MergeMode,
   RowChanges
 } from '@shared/types'
 
@@ -70,6 +72,12 @@ const api = {
     log: (path: string): Promise<Result<GitCommit[]>> => ipcRenderer.invoke('git:log', path),
     graphLog: (path: string): Promise<Result<GitGraphCommit[]>> =>
       ipcRenderer.invoke('git:graphLog', path),
+    commitFiles: (path: string, hash: string): Promise<Result<GitFile[]>> =>
+      ipcRenderer.invoke('git:commitFiles', { path, hash }),
+    diff: (
+      path: string,
+      params: { hash?: string; file: string; staged?: boolean; untracked?: boolean }
+    ): Promise<Result<string>> => ipcRenderer.invoke('git:diff', { path, ...params }),
     stage: (path: string, files: string[]): Promise<Result> =>
       ipcRenderer.invoke('git:stage', { path, files }),
     stageAll: (path: string): Promise<Result> => ipcRenderer.invoke('git:stageAll', path),
@@ -87,8 +95,26 @@ const api = {
     fetch: (path: string): Promise<Result> => ipcRenderer.invoke('git:fetch', path),
     pull: (path: string): Promise<Result> => ipcRenderer.invoke('git:pull', path),
     push: (path: string): Promise<Result> => ipcRenderer.invoke('git:push', path),
-    merge: (path: string, branch: string): Promise<Result> =>
-      ipcRenderer.invoke('git:merge', { path, branch }),
+    merge: (
+      path: string,
+      source: string,
+      opts?: { into?: string; mode?: MergeMode }
+    ): Promise<Result> => ipcRenderer.invoke('git:merge', { path, source, ...opts }),
+    createBranch: (
+      path: string,
+      name: string,
+      checkout?: boolean,
+      startPoint?: string
+    ): Promise<Result> =>
+      ipcRenderer.invoke('git:createBranch', { path, name, checkout, startPoint }),
+    renameBranch: (path: string, from: string, to: string): Promise<Result> =>
+      ipcRenderer.invoke('git:renameBranch', { path, from, to }),
+    deleteBranch: (path: string, name: string, force?: boolean): Promise<Result> =>
+      ipcRenderer.invoke('git:deleteBranch', { path, name, force }),
+    cherryPick: (path: string, hash: string): Promise<Result> =>
+      ipcRenderer.invoke('git:cherryPick', { path, hash }),
+    revert: (path: string, hash: string): Promise<Result> =>
+      ipcRenderer.invoke('git:revert', { path, hash }),
     addTag: (
       path: string,
       name: string,
@@ -106,7 +132,8 @@ const api = {
     pickFolder: (): Promise<string | null> => ipcRenderer.invoke('app:pickFolder'),
     openPath: (path: string): Promise<Result> => ipcRenderer.invoke('app:openPath', path),
     openEditor: (command: string, path: string): Promise<Result> =>
-      ipcRenderer.invoke('app:openEditor', { command, path })
+      ipcRenderer.invoke('app:openEditor', { command, path }),
+    openTerminal: (path: string): Promise<Result> => ipcRenderer.invoke('app:openTerminal', path)
   }
 }
 

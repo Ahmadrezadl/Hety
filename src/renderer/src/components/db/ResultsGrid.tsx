@@ -15,10 +15,14 @@ import {
 } from 'lucide-react'
 import type { QueryResult, SchemaColumn, RowChanges } from '@shared/types'
 import { toCsv, toTsv, toMarkdown, copyText, cellString } from '../../lib/format'
-import { Spinner, cn } from '../../lib/ui'
+import { Spinner, Modal, Button, cn } from '../../lib/ui'
 
 type Fmt = 'csv' | 'tsv' | 'markdown'
 type EditKind = 'datetime' | 'date' | 'time' | 'bool' | 'text'
+
+function isJsonType(type: string): boolean {
+  return (type || '').toLowerCase().includes('json')
+}
 
 const FORMATS: { id: Fmt; label: string; ext: string; fn: (r: QueryResult) => string }[] = [
   { id: 'markdown', label: 'Markdown', ext: 'md', fn: toMarkdown },
@@ -91,6 +95,7 @@ export default function ResultsGrid({
   const [deleted, setDeleted] = useState<Set<number>>(new Set())
   const [editing, setEditing] = useState<{ r: number; c: number } | null>(null)
   const [editingValue, setEditingValue] = useState('')
+  const [jsonEdit, setJsonEdit] = useState<{ r: number; c: number } | null>(null)
   const [cellError, setCellError] = useState<string | null>(null)
   const [pushing, setPushing] = useState(false)
   const [pushError, setPushError] = useState<string | null>(null)
@@ -128,8 +133,27 @@ export default function ResultsGrid({
   }
   const isDirty = (r: number, c: number): boolean => !!edits[r] && c in edits[r]
 
+  /** Store an edit for a cell (clearing it when the value matches the original). */
+  const applyCellEdit = (r: number, c: number, value: unknown): void => {
+    const original = result!.rows[r][c]
+    setEdits((prev) => {
+      const next = { ...prev }
+      const row = { ...(next[r] ?? {}) }
+      const same = (value === null && original === null) || String(value) === String(original)
+      if (same) delete row[c]
+      else row[c] = value
+      if (Object.keys(row).length) next[r] = row
+      else delete next[r]
+      return next
+    })
+  }
+
   const beginEdit = (r: number, c: number): void => {
     if (!editable || deleted.has(r)) return
+    if (isJsonType(typeOf(c))) {
+      setJsonEdit({ r, c })
+      return
+    }
     const kind = inputKind(typeOf(c))
     const v = displayValue(r, c)
     let init = ''
@@ -175,16 +199,7 @@ export default function ResultsGrid({
       return
     }
 
-    setEdits((prev) => {
-      const next = { ...prev }
-      const row = { ...(next[r] ?? {}) }
-      const same = (value === null && original === null) || String(value) === String(original)
-      if (same) delete row[c]
-      else row[c] = value
-      if (Object.keys(row).length) next[r] = row
-      else delete next[r]
-      return next
-    })
+    applyCellEdit(r, c, value)
     setEditing(null)
     setCellError(null)
   }
@@ -449,7 +464,103 @@ export default function ResultsGrid({
       {cellError && (
         <div className="border-t border-line bg-bad/10 px-3 py-1 text-[11px] text-bad">{cellError}</div>
       )}
+
+      {jsonEdit && (
+        <JsonEditorModal
+          column={columns[jsonEdit.c]}
+          initial={displayValue(jsonEdit.r, jsonEdit.c)}
+          onClose={() => setJsonEdit(null)}
+          onSave={(compact) => {
+            applyCellEdit(jsonEdit.r, jsonEdit.c, compact)
+            setJsonEdit(null)
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+function JsonEditorModal({
+  column,
+  initial,
+  onClose,
+  onSave
+}: {
+  column: string
+  initial: unknown
+  onClose: () => void
+  onSave: (compact: string | null) => void
+}): ReactNode {
+  const initialText = useMemo(() => {
+    if (initial === null || initial === undefined || initial === '') return ''
+    const s = typeof initial === 'string' ? initial : JSON.stringify(initial)
+    try {
+      return JSON.stringify(JSON.parse(s), null, 2)
+    } catch {
+      return s
+    }
+  }, [initial])
+
+  const [text, setText] = useState(initialText)
+  const [error, setError] = useState<string | null>(null)
+
+  const beautify = (): void => {
+    try {
+      setText(JSON.stringify(JSON.parse(text), null, 2))
+      setError(null)
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  const save = (): void => {
+    const trimmed = text.trim()
+    if (!trimmed) {
+      onSave(null)
+      return
+    }
+    try {
+      onSave(JSON.stringify(JSON.parse(trimmed)))
+    } catch (e) {
+      setError((e as Error).message)
+    }
+  }
+
+  return (
+    <Modal title={`Edit JSON · ${column}`} width={680} onClose={onClose}>
+      <div className="space-y-3">
+        <textarea
+          autoFocus
+          spellCheck={false}
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value)
+            setError(null)
+          }}
+          placeholder="null"
+          className="field-input h-[360px] w-full resize-none whitespace-pre font-mono text-[12px] leading-[1.5]"
+        />
+        {error ? (
+          <div className="rounded-md bg-bad/10 px-3 py-2 text-xs text-bad">Invalid JSON: {error}</div>
+        ) : (
+          <div className="text-[11px] text-ink-faint">
+            Empty = NULL. Changes apply locally; use the grid’s <strong>Push</strong> button to write
+            them to the database.
+          </div>
+        )}
+        <div className="flex items-center justify-between gap-2">
+          <Button variant="ghost" onClick={beautify}>
+            Beautify
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button onClick={save}>Save</Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
