@@ -35,14 +35,25 @@ export interface Database {
   createdAt: number
 }
 
+/** A local Git working copy managed under a project. */
+export interface Repository {
+  id: string
+  name: string
+  path: string
+}
+
 export interface Project {
   id: string
   name: string
   description: string
   group: string
   tags: string[]
-  /** local filesystem path used by the Repository tab (optional). */
-  repoPath: string
+  /** optional emoji shown as the project's icon. */
+  icon?: string
+  /** Git repositories managed in the Repository tab (zero or more). */
+  repositories: Repository[]
+  /** @deprecated legacy single-repo path; migrated into `repositories` on load. */
+  repoPath?: string
   servers: Server[]
   databases: Database[]
   createdAt: number

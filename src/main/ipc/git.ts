@@ -1,5 +1,6 @@
 import { ipcMain } from 'electron'
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import simpleGit, { type SimpleGit } from 'simple-git'
 import type { GitStatus, GitFile, GitCommit, GitGraphCommit, Result } from '@shared/types'
 
@@ -255,5 +256,20 @@ export function registerGitIpc(): void {
     wrap(async () => {
       await git(path).raw(['tag', '-d', name])
     })
+  )
+  ipcMain.handle(
+    'git:clone',
+    (_e, { url, directory, name }: { url: string; directory: string; name: string }) =>
+      wrap(async () => {
+        const u = url.trim()
+        const dir = directory.trim()
+        const folder = name.trim()
+        if (!u || !dir || !folder) throw new Error('URL, name and directory are required.')
+        const target = join(dir, folder)
+        if (existsSync(target)) throw new Error(`"${target}" already exists.`)
+        // Clone with the chosen parent as cwd; target folder is the given name.
+        await simpleGit(dir).clone(u, folder)
+        return target
+      })
   )
 }

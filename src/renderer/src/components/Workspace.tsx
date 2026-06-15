@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { ChevronLeft, Terminal, GitBranch, Database as DbIcon, Pencil, Trash2 } from 'lucide-react'
 import { useApp } from '../store'
-import { cn } from '../lib/ui'
+import { cn, ProjectIcon } from '../lib/ui'
 import SshPanel from './ssh/SshPanel'
 import RepoPanel from './repo/RepoPanel'
 import DbPanel from './db/DbPanel'
@@ -37,6 +37,7 @@ export default function Workspace(): ReactNode {
 
         <div className="min-w-0">
           <div className="flex items-center gap-2">
+            <ProjectIcon icon={project.icon} size={18} className="text-ink-faint" />
             <h1 className="truncate text-[17px] font-bold">{project.name}</h1>
             {project.group && (
               <span className="rounded-md bg-bg-elevated px-1.5 py-0.5 text-[10px] font-semibold text-ink-soft">

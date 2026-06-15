@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { AppData, Project, Server, Database, SavedQuery } from '@shared/types'
 import { emptyAppData } from '@shared/types'
+import { normalizeAppData } from './lib/projects'
 
 export function newId(): string {
   return crypto.randomUUID()
@@ -39,7 +40,7 @@ export const useApp = create<AppState>((set, get) => ({
   data: emptyAppData(),
   selectedProjectId: null,
 
-  load: (data) => set({ data, ready: true }),
+  load: (data) => set({ data: normalizeAppData(data), ready: true }),
 
   selectProject: (id) => {
     if (id) {

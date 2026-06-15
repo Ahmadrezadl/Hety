@@ -1,8 +1,8 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { Hexagon, Plus, Search, Clock, Folder, ChevronDown, ChevronRight } from 'lucide-react'
+import { Hexagon, Plus, Search, Clock, ChevronDown, ChevronRight } from 'lucide-react'
 import { useApp } from '../store'
 import { filterProjects, groupProjects, recentProjects } from '../lib/projects'
-import { cn } from '../lib/ui'
+import { cn, ProjectIcon } from '../lib/ui'
 import ProjectDialog from './dialogs/ProjectDialog'
 import type { Project } from '@shared/types'
 
@@ -133,11 +133,20 @@ function ProjectRow({
         selected ? 'bg-accent-dim text-ink' : 'text-ink-soft hover:bg-bg-hover hover:text-ink'
       )}
     >
-      <Folder size={15} className={selected ? 'text-accent' : 'text-ink-faint'} />
+      <span className="flex w-[18px] shrink-0 justify-center">
+        <ProjectIcon
+          icon={project.icon}
+          size={16}
+          className={selected ? 'text-accent' : 'text-ink-faint'}
+        />
+      </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-semibold">{project.name}</span>
-        {(project.servers.length > 0 || project.databases.length > 0) && (
+        {(project.servers.length > 0 ||
+          project.databases.length > 0 ||
+          project.repositories.length > 0) && (
           <span className="block truncate text-[11px] text-ink-faint">
+            {project.repositories.length > 0 && `${project.repositories.length} repo · `}
             {project.servers.length} ssh · {project.databases.length} db
           </span>
         )}

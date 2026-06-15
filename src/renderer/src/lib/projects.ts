@@ -1,6 +1,28 @@
-import type { Project } from '@shared/types'
+import type { AppData, Project } from '@shared/types'
 
 export const UNGROUPED = 'Ungrouped'
+
+/** Last path segment of a Windows or POSIX path (used to name a repo). */
+export function basename(p: string): string {
+  const trimmed = p.replace(/[\\/]+$/, '')
+  const parts = trimmed.split(/[\\/]/)
+  return parts[parts.length - 1] || trimmed || p
+}
+
+/** Ensure a project has a `repositories` array, migrating a legacy `repoPath`. */
+export function normalizeProject(p: Project): Project {
+  const repositories =
+    Array.isArray(p.repositories) && p.repositories.length
+      ? p.repositories
+      : p.repoPath && p.repoPath.trim()
+        ? [{ id: crypto.randomUUID(), name: basename(p.repoPath.trim()), path: p.repoPath.trim() }]
+        : []
+  return { ...p, repositories }
+}
+
+export function normalizeAppData(data: AppData): AppData {
+  return { ...data, projects: (data.projects ?? []).map(normalizeProject) }
+}
 
 export function filterProjects(projects: Project[], query: string, tag: string | null): Project[] {
   const q = query.trim().toLowerCase()

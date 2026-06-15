@@ -1,8 +1,40 @@
 import { type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes } from 'react'
 import clsx from 'clsx'
-import { X } from 'lucide-react'
+import { X, Folder } from 'lucide-react'
 
 export const cn = clsx
+
+/** Render a project's icon: an uploaded image (data URL), an emoji, or a
+ *  folder glyph fallback. */
+export function ProjectIcon({
+  icon,
+  size = 16,
+  className
+}: {
+  icon?: string
+  size?: number
+  className?: string
+}): ReactNode {
+  if (icon && icon.startsWith('data:'))
+    return (
+      <img
+        src={icon}
+        width={size}
+        height={size}
+        alt=""
+        draggable={false}
+        style={{ width: size, height: size }}
+        className={cn('shrink-0 rounded-[3px] object-contain', className)}
+      />
+    )
+  if (icon)
+    return (
+      <span style={{ fontSize: size, lineHeight: 1 }} className={cn('shrink-0', className)}>
+        {icon}
+      </span>
+    )
+  return <Folder size={size} className={className} />
+}
 
 type BtnProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: 'primary' | 'ghost' | 'danger'

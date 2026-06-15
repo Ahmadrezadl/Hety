@@ -95,7 +95,9 @@ const api = {
       opts?: { ref?: string; message?: string; push?: boolean }
     ): Promise<Result> => ipcRenderer.invoke('git:addTag', { path, name, ...opts }),
     deleteTag: (path: string, name: string): Promise<Result> =>
-      ipcRenderer.invoke('git:deleteTag', { path, name })
+      ipcRenderer.invoke('git:deleteTag', { path, name }),
+    clone: (url: string, directory: string, name: string): Promise<Result<string>> =>
+      ipcRenderer.invoke('git:clone', { url, directory, name })
   },
   app: {
     saveFile: (defaultName: string, content: string): Promise<Result<string>> =>

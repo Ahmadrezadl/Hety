@@ -14,10 +14,22 @@ import {
   ChevronDown,
   Check,
   Network,
-  List
+  List,
+  Plus,
+  X,
+  Download,
+  Folder
 } from 'lucide-react'
-import type { Project, GitStatus, GitCommit, GitFile, GitGraphCommit } from '@shared/types'
-import { useApp } from '../../store'
+import type {
+  Project,
+  Repository,
+  GitStatus,
+  GitCommit,
+  GitFile,
+  GitGraphCommit
+} from '@shared/types'
+import { useApp, newId } from '../../store'
+import { basename } from '../../lib/projects'
 import { Button, Spinner, Modal, Input, Field, cn } from '../../lib/ui'
 
 const CODE_COLOR: Record<string, string> = {
@@ -39,8 +51,311 @@ const EDITORS: { label: string; command: string }[] = [
 type HistTab = 'commits' | 'graph'
 type TagTarget = { hash: string; message: string }
 
+/** Outer panel: manages the project's repositories as tabs. */
 export default function RepoPanel({ project }: { project: Project }): ReactNode {
   const upsertProject = useApp((s) => s.upsertProject)
+  const repositories = project.repositories ?? []
+  const [activeId, setActiveId] = useState<string | null>(repositories[0]?.id ?? null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [addOpen, setAddOpen] = useState(false)
+
+  const active = repositories.find((r) => r.id === activeId) ?? repositories[0] ?? null
+
+  const setRepos = (repos: Repository[]): void =>
+    upsertProject({ ...project, repositories: repos })
+
+  const addRepoFromPath = (path: string, name: string): void => {
+    const repo: Repository = { id: newId(), name: name || basename(path), path }
+    setRepos([...repositories, repo])
+    setActiveId(repo.id)
+  }
+
+  const pickExisting = async (): Promise<void> => {
+    const p = await window.api.app.pickFolder()
+    if (!p) return
+    addRepoFromPath(p, basename(p))
+    setAddOpen(false)
+  }
+
+  const cloneRepo = async (
+    url: string,
+    directory: string,
+    name: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const r = await window.api.git.clone(url, directory, name)
+    if (r.ok && r.data) {
+      addRepoFromPath(r.data, name)
+      setAddOpen(false)
+    }
+    return r
+  }
+
+  const relocate = async (id: string): Promise<void> => {
+    const p = await window.api.app.pickFolder()
+    if (p) setRepos(repositories.map((r) => (r.id === id ? { ...r, path: p } : r)))
+  }
+
+  const removeRepo = (id: string): void => {
+    const repo = repositories.find((r) => r.id === id)
+    if (repo && !confirm(`Remove repository "${repo.name}" from this project? (the folder is not deleted)`))
+      return
+    const next = repositories.filter((r) => r.id !== id)
+    setRepos(next)
+    if (activeId === id) setActiveId(next[0]?.id ?? null)
+  }
+
+  const startRename = (repo: Repository): void => {
+    setRenamingId(repo.id)
+    setRenameValue(repo.name)
+  }
+  const commitRename = (): void => {
+    if (renamingId) {
+      const name = renameValue.trim()
+      if (name) setRepos(repositories.map((r) => (r.id === renamingId ? { ...r, name } : r)))
+    }
+    setRenamingId(null)
+  }
+
+  const addDialog = addOpen ? (
+    <AddRepoDialog
+      onClose={() => setAddOpen(false)}
+      onPickExisting={pickExisting}
+      onClone={cloneRepo}
+    />
+  ) : null
+
+  if (repositories.length === 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+        <FolderGit2 size={44} className="text-ink-faint" />
+        <div className="text-[15px] font-semibold text-ink-soft">No repositories yet</div>
+        <p className="max-w-sm text-xs text-ink-faint">
+          This project has no Git repositories. Add one — or several, e.g. <em>client</em> and{' '}
+          <em>backend</em> — to manage them here with tabs.
+        </p>
+        <Button onClick={() => setAddOpen(true)}>
+          <Plus size={16} /> Add repository
+        </Button>
+        {addDialog}
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex h-full flex-col">
+      {/* Repository tab bar */}
+      <div className="flex items-stretch overflow-x-auto border-b border-line bg-bg-panel">
+        {repositories.map((r) => (
+          <div
+            key={r.id}
+            onClick={() => setActiveId(r.id)}
+            onDoubleClick={() => startRename(r)}
+            title={r.path}
+            className={cn(
+              'group flex shrink-0 cursor-pointer items-center gap-2 border-r border-t-2 border-line px-3.5 py-2 text-[13px]',
+              active?.id === r.id
+                ? 'border-t-accent bg-bg-base text-ink'
+                : 'border-t-transparent text-ink-soft hover:bg-bg-hover'
+            )}
+          >
+            <GitBranch size={12} className="shrink-0" />
+            {renamingId === r.id ? (
+              <input
+                autoFocus
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                onBlur={commitRename}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitRename()
+                  else if (e.key === 'Escape') setRenamingId(null)
+                }}
+                className="w-24 rounded bg-bg-input px-1 text-[13px] outline-none ring-1 ring-accent"
+              />
+            ) : (
+              <span className="max-w-[160px] truncate">{r.name}</span>
+            )}
+            <span
+              className="rounded p-0.5 opacity-0 hover:bg-bg-hover hover:text-bad group-hover:opacity-100"
+              title="Remove repository"
+              onClick={(e) => {
+                e.stopPropagation()
+                removeRepo(r.id)
+              }}
+            >
+              <X size={12} />
+            </span>
+          </div>
+        ))}
+        <button
+          onClick={() => setAddOpen(true)}
+          title="Add repository"
+          className="flex shrink-0 items-center gap-1 px-3 text-ink-soft hover:bg-bg-hover hover:text-ink"
+        >
+          <Plus size={14} />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1">
+        {active && (
+          <RepoView key={active.id} path={active.path} onPickFolder={() => relocate(active.id)} />
+        )}
+      </div>
+      {addDialog}
+    </div>
+  )
+}
+
+function deriveRepoName(url: string): string {
+  const cleaned = url.trim().replace(/\.git$/i, '').replace(/[/\\]+$/, '')
+  const seg = cleaned.split(/[/:\\]/).filter(Boolean).pop() ?? ''
+  return seg
+}
+
+/** Choose between adding an existing folder or cloning from a URL. */
+function AddRepoDialog({
+  onClose,
+  onPickExisting,
+  onClone
+}: {
+  onClose: () => void
+  onPickExisting: () => void
+  onClone: (url: string, directory: string, name: string) => Promise<{ ok: boolean; error?: string }>
+}): ReactNode {
+  const [mode, setMode] = useState<'choose' | 'clone'>('choose')
+  const [url, setUrl] = useState('')
+  const [name, setName] = useState('')
+  const [nameTouched, setNameTouched] = useState(false)
+  const [directory, setDirectory] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const onUrlChange = (v: string): void => {
+    setUrl(v)
+    if (!nameTouched) setName(deriveRepoName(v))
+  }
+  const browse = async (): Promise<void> => {
+    const p = await window.api.app.pickFolder()
+    if (p) setDirectory(p)
+  }
+
+  const sep = directory.includes('\\') ? '\\' : '/'
+  const targetPreview = directory ? `${directory.replace(/[\\/]+$/, '')}${sep}${name}` : ''
+  const canClone = !!url.trim() && !!name.trim() && !!directory.trim() && !busy
+
+  const doClone = async (): Promise<void> => {
+    if (!canClone) return
+    setBusy(true)
+    setError(null)
+    const r = await onClone(url.trim(), directory.trim(), name.trim())
+    setBusy(false)
+    if (!r.ok) setError(r.error ?? 'Clone failed.')
+    // On success the parent closes this dialog.
+  }
+
+  return (
+    <Modal
+      title={mode === 'choose' ? 'Add repository' : 'Clone repository'}
+      width={mode === 'choose' ? 440 : 500}
+      onClose={onClose}
+    >
+      {mode === 'choose' ? (
+        <div className="space-y-2.5">
+          <button
+            onClick={onPickExisting}
+            className="flex w-full items-center gap-3 rounded-lg border border-line bg-bg-panel p-3.5 text-left hover:border-accent hover:bg-bg-elevated"
+          >
+            <FolderOpen size={20} className="shrink-0 text-accent" />
+            <span>
+              <span className="block text-[13px] font-semibold">Open existing folder</span>
+              <span className="block text-[11px] text-ink-faint">
+                Use a Git repository already on your computer.
+              </span>
+            </span>
+          </button>
+          <button
+            onClick={() => setMode('clone')}
+            className="flex w-full items-center gap-3 rounded-lg border border-line bg-bg-panel p-3.5 text-left hover:border-accent hover:bg-bg-elevated"
+          >
+            <Download size={20} className="shrink-0 text-accent" />
+            <span>
+              <span className="block text-[13px] font-semibold">Clone repository</span>
+              <span className="block text-[11px] text-ink-faint">
+                Clone from an SSH or HTTPS URL into a new folder.
+              </span>
+            </span>
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <Field label="Repository URL">
+            <Input
+              autoFocus
+              placeholder="git@github.com:user/repo.git  or  https://github.com/user/repo.git"
+              value={url}
+              onChange={(e) => onUrlChange(e.target.value)}
+            />
+          </Field>
+          <Field label="Name" hint="Folder name and tab label for this repository.">
+            <Input
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value)
+                setNameTouched(true)
+              }}
+              placeholder="repo"
+            />
+          </Field>
+          <Field
+            label="Clone into"
+            hint={targetPreview ? `Will create ${targetPreview}` : 'Pick the parent folder.'}
+          >
+            <div className="flex gap-2">
+              <Input
+                placeholder="C:\path\to\parent"
+                value={directory}
+                onChange={(e) => setDirectory(e.target.value)}
+              />
+              <button onClick={browse} className="btn-ghost btn shrink-0 px-2" title="Browse" type="button">
+                <Folder size={15} />
+              </button>
+            </div>
+          </Field>
+
+          {error && (
+            <div className="break-all rounded-lg bg-bad/10 px-3 py-2 text-xs text-bad">{error}</div>
+          )}
+
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <Button variant="ghost" onClick={() => setMode('choose')} disabled={busy}>
+              Back
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="ghost" onClick={onClose} disabled={busy}>
+                Cancel
+              </Button>
+              <Button disabled={!canClone} onClick={doClone}>
+                {busy ? (
+                  <>
+                    <Spinner /> Cloning…
+                  </>
+                ) : (
+                  <>
+                    <Download size={14} /> Clone
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+/** Inner panel: the full Git UI for a single repository path. */
+function RepoView({ path, onPickFolder }: { path: string; onPickFolder: () => void }): ReactNode {
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [log, setLog] = useState<GitCommit[]>([])
   const [graph, setGraph] = useState<GitGraphCommit[]>([])
@@ -50,8 +365,6 @@ export default function RepoPanel({ project }: { project: Project }): ReactNode 
   const [histTab, setHistTab] = useState<HistTab>('commits')
   const [mergeOpen, setMergeOpen] = useState(false)
   const [tagFor, setTagFor] = useState<TagTarget | null>(null)
-
-  const path = project.repoPath
 
   const refresh = useCallback(async () => {
     if (!path) return
@@ -82,17 +395,12 @@ export default function RepoPanel({ project }: { project: Project }): ReactNode 
     await refresh()
   }
 
-  const pickFolder = async (): Promise<void> => {
-    const p = await window.api.app.pickFolder()
-    if (p) upsertProject({ ...project, repoPath: p })
-  }
-
   if (!path) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
         <FolderGit2 size={44} className="text-ink-faint" />
         <div className="text-[15px] font-semibold text-ink-soft">No repository folder set</div>
-        <Button onClick={pickFolder}>
+        <Button onClick={onPickFolder}>
           <FolderOpen size={16} /> Choose repository folder
         </Button>
       </div>
@@ -114,7 +422,7 @@ export default function RepoPanel({ project }: { project: Project }): ReactNode 
             project are still saved — just point the repository to its new location.
           </p>
         )}
-        <Button onClick={pickFolder}>
+        <Button onClick={onPickFolder}>
           {missing ? (
             <>
               <FolderSearch size={16} /> Locate folder

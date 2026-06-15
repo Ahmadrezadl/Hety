@@ -1,8 +1,8 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { Plus, Search, Clock, Server, Database as DbIcon, Pencil, Trash2 } from 'lucide-react'
+import { Plus, Search, Clock, Server, Database as DbIcon, GitBranch, Pencil, Trash2 } from 'lucide-react'
 import { useApp } from '../store'
 import { filterProjects, groupProjects, recentProjects, topTags } from '../lib/projects'
-import { Button, Chip, cn } from '../lib/ui'
+import { Button, Chip, cn, ProjectIcon } from '../lib/ui'
 import ProjectDialog from './dialogs/ProjectDialog'
 import type { Project } from '@shared/types'
 
@@ -158,7 +158,12 @@ function ProjectCard({
         </button>
       </div>
 
-      <div className="mb-1 truncate pr-12 text-[15px] font-bold">{project.name}</div>
+      <div className="mb-1 flex items-center gap-2 pr-12">
+        <span className="flex w-5 shrink-0 justify-center">
+          <ProjectIcon icon={project.icon} size={18} className="text-ink-faint" />
+        </span>
+        <span className="truncate text-[15px] font-bold">{project.name}</span>
+      </div>
       <div className="mb-3 line-clamp-2 h-8 text-xs text-ink-faint">
         {project.description || 'No description'}
       </div>
@@ -175,6 +180,9 @@ function ProjectCard({
       </div>
 
       <div className="flex items-center gap-3 text-[11px] text-ink-soft">
+        <span className="flex items-center gap-1">
+          <GitBranch size={12} /> {project.repositories.length}
+        </span>
         <span className="flex items-center gap-1">
           <Server size={12} /> {project.servers.length}
         </span>
