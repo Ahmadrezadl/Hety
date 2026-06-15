@@ -7,6 +7,9 @@ import { oneDark } from '@codemirror/theme-one-dark'
 import { Play, Save } from 'lucide-react'
 import type { DbSchema, QueryResult, SchemaColumn } from '@shared/types'
 import ResultsGrid from './ResultsGrid'
+import { Modal, Button, Input } from '../../lib/ui'
+
+export type SortState = { column: string; dir: 'asc' | 'desc' } | null
 
 function buildSchema(schema?: DbSchema): Record<string, string[]> {
   const out: Record<string, string[]> = {}
@@ -17,6 +20,28 @@ function buildSchema(schema?: DbSchema): Record<string, string[]> {
     }
   }
   return out
+}
+
+/** Rewrite a SELECT to sort by `column` (or remove sorting when dir is null),
+ *  preserving any trailing LIMIT/OFFSET. */
+function applySort(sql: string, column: string, dir: 'asc' | 'desc' | null): string {
+  let s = sql.trim()
+  let semi = ''
+  while (s.endsWith(';')) {
+    s = s.slice(0, -1).trimEnd()
+    semi = ';'
+  }
+  let tail = ''
+  const tailRe = /\s+(limit\s+\d+(\s+offset\s+\d+)?|offset\s+\d+(\s+limit\s+\d+)?)\s*$/i
+  const m = s.match(tailRe)
+  if (m && m.index !== undefined) {
+    tail = ' ' + m[0].trim()
+    s = s.slice(0, m.index).trimEnd()
+  }
+  s = s.replace(/\s+order\s+by\s+[\s\S]+$/i, '').trimEnd()
+  const col = `"${column.replace(/"/g, '""')}"`
+  const order = dir ? ` ORDER BY ${col} ${dir.toUpperCase()}` : ''
+  return `${s}${order}${tail}${semi}`
 }
 
 export default function SqlConsole({
@@ -48,19 +73,17 @@ export default function SqlConsole({
   const [result, setResult] = useState<QueryResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
+  const [sort, setSort] = useState<SortState>(null)
+  const [saveOpen, setSaveOpen] = useState(false)
+  const [saveName, setSaveName] = useState('')
 
-  const run = async (): Promise<void> => {
-    const view = viewRef.current
-    if (!view || !connRef.current) return
-    const sel = view.state.selection.main
-    const text = sel.empty
-      ? view.state.doc.toString()
-      : view.state.sliceDoc(sel.from, sel.to)
-    const stmt = text.trim()
-    if (!stmt) return
+  const execute = async (stmt: string): Promise<void> => {
+    if (!connRef.current) return
+    const text = stmt.trim()
+    if (!text) return
     setRunning(true)
     setError(null)
-    const r = await window.api.db.query(connRef.current, stmt)
+    const r = await window.api.db.query(connRef.current, text)
     setRunning(false)
     if (r.ok && r.data) {
       setResult(r.data)
@@ -69,7 +92,30 @@ export default function SqlConsole({
       setError(r.ok ? 'No data' : r.error)
     }
   }
+
+  const run = (): void => {
+    const view = viewRef.current
+    if (!view) return
+    const sel = view.state.selection.main
+    const text = sel.empty ? view.state.doc.toString() : view.state.sliceDoc(sel.from, sel.to)
+    setSort(null) // a manual run clears any column-sort indicator
+    void execute(text)
+  }
   runRef.current = run
+
+  // Re-run the current statement sorted by a clicked column, rewriting the SQL.
+  const sortBy = (column: string): void => {
+    const view = viewRef.current
+    if (!view) return
+    let dir: 'asc' | 'desc' | null
+    if (!sort || sort.column !== column) dir = 'asc'
+    else if (sort.dir === 'asc') dir = 'desc'
+    else dir = null
+    const next = applySort(view.state.doc.toString(), column, dir)
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next } })
+    setSort(dir ? { column, dir } : null)
+    void execute(next)
+  }
 
   // create editor once
   useEffect(() => {
@@ -123,13 +169,19 @@ export default function SqlConsole({
     })
   }, [schema])
 
-  const save = (): void => {
+  const openSave = (): void => {
     const view = viewRef.current
-    if (!view) return
-    const stmt = view.state.doc.toString().trim()
-    if (!stmt) return
-    const name = window.prompt('Save query as:')
-    if (name && name.trim()) onSave(name.trim(), stmt)
+    if (!view || !view.state.doc.toString().trim()) return
+    setSaveName('')
+    setSaveOpen(true)
+  }
+
+  const confirmSave = (): void => {
+    const view = viewRef.current
+    const stmt = view?.state.doc.toString().trim()
+    const name = saveName.trim()
+    if (view && stmt && name) onSave(name, stmt)
+    setSaveOpen(false)
   }
 
   return (
@@ -145,7 +197,7 @@ export default function SqlConsole({
         </button>
         <button
           className="flex items-center gap-1.5 rounded-md border border-line bg-bg-elevated px-2.5 py-1 text-[12px] font-semibold text-ink-soft hover:bg-bg-hover hover:text-ink"
-          onClick={save}
+          onClick={openSave}
         >
           <Save size={12} /> Save
         </button>
@@ -164,8 +216,35 @@ export default function SqlConsole({
           }
           locked={locked}
           onReload={run}
+          sort={sort}
+          onSort={sortBy}
         />
       </div>
+
+      {saveOpen && (
+        <Modal title="Save query" width={420} onClose={() => setSaveOpen(false)}>
+          <div className="space-y-3">
+            <Input
+              autoFocus
+              placeholder="Query name"
+              value={saveName}
+              onChange={(e) => setSaveName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') confirmSave()
+                else if (e.key === 'Escape') setSaveOpen(false)
+              }}
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setSaveOpen(false)}>
+                Cancel
+              </Button>
+              <Button disabled={!saveName.trim()} onClick={confirmSave}>
+                Save
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

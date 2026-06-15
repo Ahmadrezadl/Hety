@@ -112,11 +112,23 @@ export interface GitCommit {
   date: string
   relative: string
 }
+/** A commit enriched with parent/ref data for drawing a branch graph. */
+export interface GitGraphCommit {
+  hash: string
+  parents: string[]
+  message: string
+  author: string
+  relative: string
+  refs: string[]
+}
 export interface GitStatus {
   isRepo: boolean
+  /** false when the configured repoPath no longer exists on disk. */
+  exists: boolean
   branch: string
   branches: string[]
   remoteBranches: string[]
+  tags: string[]
   ahead: number
   behind: number
   staged: GitFile[]

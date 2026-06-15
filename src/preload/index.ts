@@ -8,6 +8,7 @@ import type {
   DbSchema,
   GitStatus,
   GitCommit,
+  GitGraphCommit,
   RowChanges
 } from '@shared/types'
 
@@ -67,6 +68,8 @@ const api = {
   git: {
     status: (path: string): Promise<Result<GitStatus>> => ipcRenderer.invoke('git:status', path),
     log: (path: string): Promise<Result<GitCommit[]>> => ipcRenderer.invoke('git:log', path),
+    graphLog: (path: string): Promise<Result<GitGraphCommit[]>> =>
+      ipcRenderer.invoke('git:graphLog', path),
     stage: (path: string, files: string[]): Promise<Result> =>
       ipcRenderer.invoke('git:stage', { path, files }),
     stageAll: (path: string): Promise<Result> => ipcRenderer.invoke('git:stageAll', path),
@@ -83,7 +86,16 @@ const api = {
       ipcRenderer.invoke('git:checkoutRemote', { path, ref }),
     fetch: (path: string): Promise<Result> => ipcRenderer.invoke('git:fetch', path),
     pull: (path: string): Promise<Result> => ipcRenderer.invoke('git:pull', path),
-    push: (path: string): Promise<Result> => ipcRenderer.invoke('git:push', path)
+    push: (path: string): Promise<Result> => ipcRenderer.invoke('git:push', path),
+    merge: (path: string, branch: string): Promise<Result> =>
+      ipcRenderer.invoke('git:merge', { path, branch }),
+    addTag: (
+      path: string,
+      name: string,
+      opts?: { ref?: string; message?: string; push?: boolean }
+    ): Promise<Result> => ipcRenderer.invoke('git:addTag', { path, name, ...opts }),
+    deleteTag: (path: string, name: string): Promise<Result> =>
+      ipcRenderer.invoke('git:deleteTag', { path, name })
   },
   app: {
     saveFile: (defaultName: string, content: string): Promise<Result<string>> =>

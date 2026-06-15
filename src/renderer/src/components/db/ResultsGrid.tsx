@@ -9,7 +9,9 @@ import {
   UploadCloud,
   RotateCcw,
   Search,
-  Lock
+  Lock,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react'
 import type { QueryResult, SchemaColumn, RowChanges } from '@shared/types'
 import { toCsv, toTsv, toMarkdown, copyText, cellString } from '../../lib/format'
@@ -70,7 +72,9 @@ export default function ResultsGrid({
   running,
   editContext,
   locked,
-  onReload
+  onReload,
+  sort,
+  onSort
 }: {
   result: QueryResult | null
   error: string | null
@@ -78,6 +82,8 @@ export default function ResultsGrid({
   editContext?: EditContext
   locked?: boolean
   onReload?: () => void
+  sort?: { column: string; dir: 'asc' | 'desc' } | null
+  onSort?: (column: string) => void
 }): ReactNode {
   const [menu, setMenu] = useState<'copy' | 'save' | null>(null)
   const [search, setSearch] = useState('')
@@ -337,14 +343,29 @@ export default function ResultsGrid({
                 </th>
                 {columns.map((c, i) => {
                   const col = meta.byName.get(c)
+                  const sorted = sort && sort.column === c ? sort.dir : null
                   return (
                     <th
                       key={i}
-                      className="whitespace-nowrap border-b border-r border-line bg-bg-elevated px-3 py-1.5 text-left font-bold text-ink-soft"
-                      title={col ? `${c} · ${col.type}${col.pk ? ' · PK' : ''}` : c}
+                      className={cn(
+                        'whitespace-nowrap border-b border-r border-line bg-bg-elevated px-3 py-1.5 text-left font-bold text-ink-soft',
+                        onSort && 'cursor-pointer select-none hover:text-ink'
+                      )}
+                      title={
+                        onSort
+                          ? `${col ? `${c} · ${col.type}${col.pk ? ' · PK' : ''}` : c} · click to sort`
+                          : col
+                            ? `${c} · ${col.type}${col.pk ? ' · PK' : ''}`
+                            : c
+                      }
+                      onClick={onSort ? () => onSort(c) : undefined}
                     >
-                      {col?.pk && <span className="mr-1 text-warn">🔑</span>}
-                      {c}
+                      <span className="inline-flex items-center gap-1">
+                        {col?.pk && <span className="text-warn">🔑</span>}
+                        {c}
+                        {sorted === 'asc' && <ArrowUp size={12} className="text-accent" />}
+                        {sorted === 'desc' && <ArrowDown size={12} className="text-accent" />}
+                      </span>
                     </th>
                   )
                 })}
