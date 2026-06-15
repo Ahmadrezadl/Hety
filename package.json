@@ -1,7 +1,7 @@
 {
   "name": "hety",
   "version": "2.0.0",
-  "description": "Hety — all-in-one developer cockpit: SSH, Git, and PostgreSQL in one place.",
+  "description": "Hety - all-in-one developer cockpit: SSH, Git, and PostgreSQL in one place.",
   "main": "./out/main/index.js",
   "author": "Hety",
   "license": "MIT",
