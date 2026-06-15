@@ -42,6 +42,26 @@ export interface Repository {
   path: string
 }
 
+// ---- Planning board (Kanban) ----
+export interface BoardCard {
+  id: string
+  title: string
+  description?: string
+  createdAt: number
+}
+export interface BoardColumn {
+  id: string
+  name: string
+  /** optional accent color (hex). */
+  color?: string
+  /** when true, a card dropped onto this column is deleted (trash/done-and-archive). */
+  deleteOnDrop?: boolean
+  cards: BoardCard[]
+}
+export interface Board {
+  columns: BoardColumn[]
+}
+
 export interface Project {
   id: string
   name: string
@@ -54,6 +74,8 @@ export interface Project {
   repositories: Repository[]
   /** @deprecated legacy single-repo path; migrated into `repositories` on load. */
   repoPath?: string
+  /** planning board (Kanban) for this project. */
+  board?: Board
   servers: Server[]
   databases: Database[]
   createdAt: number

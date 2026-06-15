@@ -1,18 +1,20 @@
 import { useState, type ReactNode } from 'react'
-import { ChevronLeft, Terminal, GitBranch, Database as DbIcon, Pencil, Trash2 } from 'lucide-react'
+import { ChevronLeft, Terminal, GitBranch, Database as DbIcon, Columns3, Pencil, Trash2 } from 'lucide-react'
 import { useApp } from '../store'
 import { cn, ProjectIcon } from '../lib/ui'
 import SshPanel from './ssh/SshPanel'
 import RepoPanel from './repo/RepoPanel'
 import DbPanel from './db/DbPanel'
+import BoardPanel from './board/BoardPanel'
 import ProjectDialog from './dialogs/ProjectDialog'
 
-type Tab = 'ssh' | 'repo' | 'db'
+type Tab = 'ssh' | 'repo' | 'db' | 'board'
 
 const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
   { id: 'ssh', label: 'SSH', icon: <Terminal size={15} /> },
   { id: 'repo', label: 'Repository', icon: <GitBranch size={15} /> },
-  { id: 'db', label: 'Database', icon: <DbIcon size={15} /> }
+  { id: 'db', label: 'Database', icon: <DbIcon size={15} /> },
+  { id: 'board', label: 'Planning', icon: <Columns3 size={15} /> }
 ]
 
 export default function Workspace(): ReactNode {
@@ -107,6 +109,9 @@ export default function Workspace(): ReactNode {
         </div>
         <div className={cn('h-full', tab === 'db' ? 'block' : 'hidden')}>
           <DbPanel project={project} />
+        </div>
+        <div className={cn('h-full', tab === 'board' ? 'block' : 'hidden')}>
+          <BoardPanel project={project} />
         </div>
       </div>
 
