@@ -15,9 +15,11 @@ import {
   Unlock
 } from 'lucide-react'
 import type { Project, Database, DbSchema, SchemaTable, SchemaColumn } from '@shared/types'
+import { getDatabaseKindInfo } from '@shared/databases'
 import { useApp, newId } from '../../store'
 import { cn, EmptyState, StatusDot } from '../../lib/ui'
 import DatabaseDialog from '../dialogs/DatabaseDialog'
+import DatabaseLogo from './DatabaseLogo'
 import SchemaTree from './SchemaTree'
 import SqlConsole from './SqlConsole'
 
@@ -58,6 +60,7 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
   const [savedSearch, setSavedSearch] = useState('')
 
   const selectedDb = project.databases.find((d) => d.id === selectedDbId) ?? null
+  const selectedDbInfo = selectedDb ? getDatabaseKindInfo(selectedDb.kind) : null
 
   const openConsole = (
     title: string,
@@ -87,6 +90,13 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
       setConn({ id: null, status: 'idle' })
       return
     }
+
+    const info = getDatabaseKindInfo(selectedDb.kind)
+    if (!info.supported) {
+      setConn({ id: null, status: 'idle' })
+      return
+    }
+
     let cancelled = false
     let cid: string | null = null
     setConn({ id: null, status: 'connecting' })
@@ -117,7 +127,7 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
       if (cid) window.api.db.disconnect(cid)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedDbId, gen])
+  }, [selectedDbId, selectedDb?.kind, gen])
 
   const refreshSchema = async (): Promise<void> => {
     if (!conn.id) return
@@ -174,54 +184,65 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
           {project.databases.length === 0 && (
             <p className="px-2 py-3 text-center text-xs text-ink-faint">No databases yet.</p>
           )}
-          {project.databases.map((d) => (
-            <div
-              key={d.id}
-              className={cn(
-                'group mb-1 flex items-center gap-2 rounded-lg px-2.5 py-2',
-                selectedDbId === d.id ? 'bg-accent-dim' : 'hover:bg-bg-hover'
-              )}
-            >
-              <button className="flex min-w-0 flex-1 items-center gap-2" onClick={() => setSelectedDbId(d.id)}>
-                <DbIcon
-                  size={14}
-                  style={d.color ? { color: d.color } : undefined}
-                  className={d.color ? '' : selectedDbId === d.id ? 'text-accent' : 'text-ink-faint'}
-                />
-                <span className="min-w-0 flex-1 text-left">
-                  <span className="flex items-center gap-1">
-                    <span className="truncate text-[13px] font-semibold">{d.name}</span>
-                    {d.locked && <Lock size={11} className="shrink-0 text-warn" />}
+          {project.databases.map((d) => {
+            const info = getDatabaseKindInfo(d.kind)
+            const location = info.supportsHost
+              ? `${d.host}/${d.database}`
+              : d.database || `${info.name} profile`
+
+            return (
+              <div
+                key={d.id}
+                className={cn(
+                  'group mb-1 flex items-center gap-2 rounded-lg px-2.5 py-2',
+                  selectedDbId === d.id ? 'bg-accent-dim' : 'hover:bg-bg-hover'
+                )}
+              >
+                <button className="flex min-w-0 flex-1 items-center gap-2" onClick={() => setSelectedDbId(d.id)}>
+                  <span className="relative shrink-0">
+                    <DatabaseLogo kind={d.kind} size={19} />
+                    {d.color && (
+                      <span
+                        className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full border border-bg-panel"
+                        style={{ background: d.color }}
+                      />
+                    )}
                   </span>
-                  <span className="block truncate text-[11px] text-ink-faint">
-                    {d.useSsh ? 'ssh · ' : ''}
-                    {d.host}/{d.database}
+                  <span className="min-w-0 flex-1 text-left">
+                    <span className="flex items-center gap-1">
+                      <span className="truncate text-[13px] font-semibold">{d.name}</span>
+                      {d.locked && <Lock size={11} className="shrink-0 text-warn" />}
+                    </span>
+                    <span className="block truncate text-[11px] text-ink-faint">
+                      {info.name} - {d.useSsh ? 'ssh - ' : ''}
+                      {location}
+                    </span>
                   </span>
-                </span>
-              </button>
-              <div className="flex shrink-0 gap-0.5 opacity-0 group-hover:opacity-100">
-                <button
-                  className="rounded p-1 text-ink-faint hover:bg-bg-elevated hover:text-ink"
-                  title="Edit"
-                  onClick={() => setDialog({ database: d })}
-                >
-                  <Pencil size={12} />
                 </button>
-                <button
-                  className="rounded p-1 text-ink-faint hover:bg-bg-elevated hover:text-bad"
-                  title="Delete"
-                  onClick={() => {
-                    if (confirm(`Delete database "${d.name}"?`)) {
-                      if (selectedDbId === d.id) setSelectedDbId(null)
-                      deleteDatabase(project.id, d.id)
-                    }
-                  }}
-                >
-                  <Trash2 size={12} />
-                </button>
+                <div className="flex shrink-0 gap-0.5 opacity-0 group-hover:opacity-100">
+                  <button
+                    className="rounded p-1 text-ink-faint hover:bg-bg-elevated hover:text-ink"
+                    title="Edit"
+                    onClick={() => setDialog({ database: d })}
+                  >
+                    <Pencil size={12} />
+                  </button>
+                  <button
+                    className="rounded p-1 text-ink-faint hover:bg-bg-elevated hover:text-bad"
+                    title="Delete"
+                    onClick={() => {
+                      if (confirm(`Delete database "${d.name}"?`)) {
+                        if (selectedDbId === d.id) setSelectedDbId(null)
+                        deleteDatabase(project.id, d.id)
+                      }
+                    }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
 
         {/* Saved queries */}
@@ -234,7 +255,7 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
               <Search size={13} className="pointer-events-none absolute left-2 top-2 text-ink-faint" />
               <input
                 className="w-full rounded-md bg-bg-input py-1.5 pl-7 pr-2 text-xs outline-none placeholder:text-ink-faint focus:ring-1 focus:ring-accent"
-                placeholder="Search queries…"
+                placeholder="Search queries..."
                 value={savedSearch}
                 onChange={(e) => setSavedSearch(e.target.value)}
               />
@@ -255,7 +276,7 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
                   className="min-w-0 flex-1 truncate text-left text-[12px]"
                   onClick={() => openConsole(sq.name, sq.sql, false)}
                 >
-                  {sq.databaseId === selectedDbId && <span className="text-accent">★ </span>}
+                  {sq.databaseId === selectedDbId && <span className="text-accent">* </span>}
                   {sq.name}
                 </button>
                 <button
@@ -277,16 +298,48 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
           <EmptyState
             icon={<DbIcon size={42} />}
             title="Select a database"
-            subtitle="Pick a connection on the left, or add a new one. You can test the connection before saving."
+            subtitle="Pick a connection on the left, or add a new one. You can test supported connections before saving."
           />
+        ) : selectedDbInfo && !selectedDbInfo.supported ? (
+          <>
+            <div
+              className="flex items-center gap-2 border-b border-line bg-bg-panel px-4 py-2"
+              style={selectedDb.color ? { borderTop: `2px solid ${selectedDb.color}` } : undefined}
+            >
+              <DatabaseLogo kind={selectedDb.kind} size={18} />
+              <span className="text-[14px] font-bold">{selectedDb.name}</span>
+              <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-bold text-warn">
+                PROFILE ONLY
+              </span>
+              <span className="text-[11px] text-ink-soft">{selectedDbInfo.name}</span>
+              <div className="ml-auto flex items-center gap-1">
+                <button
+                  className="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-semibold text-ink-soft hover:bg-bg-hover hover:text-ink"
+                  onClick={() => setDialog({ database: selectedDb })}
+                >
+                  <Pencil size={14} /> Edit
+                </button>
+              </div>
+            </div>
+            <EmptyState
+              icon={<DatabaseLogo kind={selectedDb.kind} size={44} />}
+              title={`${selectedDbInfo.name} profile`}
+              subtitle="This database type can be selected and saved, but live connections, schema browsing, and query execution are not wired in this build yet."
+            />
+          </>
         ) : (
           <>
             <div
               className="flex items-center gap-2 border-b border-line bg-bg-panel px-4 py-2"
               style={selectedDb.color ? { borderTop: `2px solid ${selectedDb.color}` } : undefined}
             >
-              <DbIcon size={15} style={{ color: selectedDb.color ?? '#6d8cff' }} />
+              <DatabaseLogo kind={selectedDb.kind} size={18} />
               <span className="text-[14px] font-bold">{selectedDb.name}</span>
+              {selectedDbInfo && (
+                <span className="rounded bg-bg-elevated px-1.5 py-0.5 text-[10px] font-bold text-ink-soft">
+                  {selectedDbInfo.name}
+                </span>
+              )}
               {selectedDb.locked && (
                 <span className="flex items-center gap-1 rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-bold text-warn">
                   <Lock size={10} /> LOCKED
@@ -297,7 +350,7 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
                 {conn.status === 'connected'
                   ? 'Connected'
                   : conn.status === 'connecting'
-                    ? 'Connecting…'
+                    ? 'Connecting...'
                     : conn.status === 'error'
                       ? `Error: ${conn.error}`
                       : 'Disconnected'}
@@ -346,7 +399,7 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
 
               <div className="flex min-w-0 flex-1 flex-col bg-bg-base">
                 {tabs.length === 0 ? (
-                  <EmptyState icon={<FileCode2 size={36} />} title="No query open" subtitle="Press “New Query”." />
+                  <EmptyState icon={<FileCode2 size={36} />} title="No query open" subtitle="Press New Query." />
                 ) : (
                   <>
                     <div className="flex items-stretch overflow-x-auto border-b border-line bg-bg-panel">

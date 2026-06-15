@@ -1,3 +1,5 @@
+import type { DatabaseKind } from './databases'
+
 export type AuthType = 'password' | 'key'
 
 export interface Server {
@@ -17,8 +19,7 @@ export interface Server {
 export interface Database {
   id: string
   name: string
-  /** Only 'postgresql' supported in this version. */
-  kind: 'postgresql'
+  kind: DatabaseKind
   host: string
   port: number
   database: string

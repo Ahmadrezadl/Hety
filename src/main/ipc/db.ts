@@ -20,6 +20,7 @@ import type {
   SchemaNamespace,
   RowChanges
 } from '@shared/types'
+import { getDatabaseKindInfo } from '@shared/databases'
 
 interface Tunnel {
   localPort: number
@@ -92,6 +93,11 @@ async function openConnection(
   db: Database,
   server?: Server
 ): Promise<Connection> {
+  const info = getDatabaseKindInfo(db.kind)
+  if (!info.supported) {
+    throw new Error(`${info.name} connections are not wired in this build yet.`)
+  }
+
   let tunnel: Tunnel | undefined
   let host = db.host
   let port = db.port
