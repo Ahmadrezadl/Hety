@@ -8,6 +8,7 @@ const LOGO_STYLE: Record<DatabaseKind, { bg: string; fg: string; mark: string }>
   mariadb: { bg: '#003545', fg: '#ffffff', mark: 'MA' },
   sqlite: { bg: '#0f80cc', fg: '#ffffff', mark: 'SQ' },
   sqlserver: { bg: '#cc2927', fg: '#ffffff', mark: 'MS' },
+  clickhouse: { bg: '#ffcc00', fg: '#1a1a1a', mark: 'CH' },
   mongodb: { bg: '#47a248', fg: '#ffffff', mark: 'MO' },
   redis: { bg: '#dc382d', fg: '#ffffff', mark: 'RD' }
 }

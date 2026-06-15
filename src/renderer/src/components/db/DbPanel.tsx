@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import type { Project, Database, DbSchema, SchemaTable, SchemaColumn } from '@shared/types'
 import { getDatabaseKindInfo } from '@shared/databases'
+import { buildSelectAll, quoteQualified } from '@shared/sql'
 import { useApp, newId } from '../../store'
 import { cn, EmptyState, StatusDot } from '../../lib/ui'
 import DatabaseDialog from '../dialogs/DatabaseDialog'
@@ -143,8 +144,9 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
   }
 
   const openTable = (schemaName: string, table: SchemaTable): void => {
-    const qualified = `"${schemaName}"."${table.name}"`
-    const sql = `SELECT * FROM ${qualified} LIMIT 200;`
+    const kind = selectedDb?.kind
+    const qualified = quoteQualified(kind ?? 'postgresql', schemaName, table.name)
+    const sql = buildSelectAll(kind ?? 'postgresql', schemaName, table.name)
     openConsole(table.name, sql, true, { table: qualified, columns: table.columns })
   }
 
@@ -394,7 +396,12 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
 
             <div className="flex min-h-0 flex-1">
               <div className="w-60 shrink-0 overflow-auto border-r border-line bg-bg-panel">
-                <SchemaTree dbName={selectedDb.database} schema={schema} onOpenTable={openTable} />
+                <SchemaTree
+                  dbName={selectedDb.database}
+                  kind={selectedDb.kind}
+                  schema={schema}
+                  onOpenTable={openTable}
+                />
               </div>
 
               <div className="flex min-w-0 flex-1 flex-col bg-bg-base">

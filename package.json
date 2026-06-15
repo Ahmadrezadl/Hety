@@ -15,6 +15,9 @@
     "pack": "electron-vite build && electron-builder"
   },
   "dependencies": {
+    "@clickhouse/client": "^1.20.0",
+    "mssql": "^12.5.5",
+    "mysql2": "^3.22.5",
     "pg": "^8.13.1",
     "simple-git": "^3.27.0",
     "ssh2": "^1.16.0"
@@ -26,6 +29,7 @@
     "@codemirror/state": "^6.4.1",
     "@codemirror/theme-one-dark": "^6.1.2",
     "@codemirror/view": "^6.34.2",
+    "@types/mssql": "^12.3.0",
     "@types/node": "^22.10.1",
     "@types/pg": "^8.11.10",
     "@types/react": "^18.3.12",

@@ -12,6 +12,8 @@ import {
   Database as DbIcon
 } from 'lucide-react'
 import type { DbSchema, SchemaTable, SchemaEnum } from '@shared/types'
+import type { DatabaseKind } from '@shared/databases'
+import { quoteIdent, quoteQualified } from '@shared/sql'
 
 interface MenuItem {
   label: string
@@ -23,26 +25,28 @@ interface MenuState {
   items: MenuItem[]
 }
 
-function buildTableDDL(schemaName: string, t: SchemaTable): string {
-  const lines = t.columns.map((c) => `  "${c.name}" ${c.type}`)
-  const pks = t.columns.filter((c) => c.pk).map((c) => `"${c.name}"`)
+function buildTableDDL(kind: DatabaseKind | string, schemaName: string, t: SchemaTable): string {
+  const lines = t.columns.map((c) => `  ${quoteIdent(kind, c.name)} ${c.type}`)
+  const pks = t.columns.filter((c) => c.pk).map((c) => quoteIdent(kind, c.name))
   if (pks.length) lines.push(`  PRIMARY KEY (${pks.join(', ')})`)
-  return `CREATE TABLE "${schemaName}"."${t.name}" (\n${lines.join(',\n')}\n);`
+  return `CREATE TABLE ${quoteQualified(kind, schemaName, t.name)} (\n${lines.join(',\n')}\n);`
 }
 
-function buildEnumDDL(schemaName: string, e: SchemaEnum): string {
+function buildEnumDDL(kind: DatabaseKind | string, schemaName: string, e: SchemaEnum): string {
   const vals = e.values.map((v) => `  '${v.replace(/'/g, "''")}'`).join(',\n')
-  return `CREATE TYPE "${schemaName}"."${e.name}" AS ENUM (\n${vals}\n);`
+  return `CREATE TYPE ${quoteQualified(kind, schemaName, e.name)} AS ENUM (\n${vals}\n);`
 }
 
 const copy = (text: string): void => void navigator.clipboard.writeText(text)
 
 export default function SchemaTree({
   dbName,
+  kind,
   schema,
   onOpenTable
 }: {
   dbName: string
+  kind: DatabaseKind | string
   schema?: DbSchema
   onOpenTable: (schemaName: string, table: SchemaTable) => void
 }): ReactNode {
@@ -109,7 +113,7 @@ export default function SchemaTree({
           if (q && !tables.length && !views.length && !enums.length) return null
           const tableMenu = (t: SchemaTable): MenuItem[] => [
             { label: 'View data', onClick: () => onOpenTable(s.name, t) },
-            { label: 'Copy schema', onClick: () => copy(buildTableDDL(s.name, t)) },
+            { label: 'Copy schema', onClick: () => copy(buildTableDDL(kind, s.name, t)) },
             { label: 'Copy name', onClick: () => copy(t.name) }
           ]
           const body = (
@@ -173,7 +177,7 @@ export default function SchemaTree({
                           onToggle={() => toggle(ek)}
                           onContext={(ev) =>
                             openMenu(ev, [
-                              { label: 'Copy schema', onClick: () => copy(buildEnumDDL(s.name, e)) },
+                              { label: 'Copy schema', onClick: () => copy(buildEnumDDL(kind, s.name, e)) },
                               { label: 'Copy name', onClick: () => copy(e.name) }
                             ])
                           }

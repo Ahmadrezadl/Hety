@@ -2,8 +2,9 @@ export const DATABASE_KINDS = [
   'postgresql',
   'mysql',
   'mariadb',
-  'sqlite',
   'sqlserver',
+  'clickhouse',
+  'sqlite',
   'mongodb',
   'redis'
 ] as const
@@ -49,7 +50,7 @@ export const DATABASE_KIND_INFO: Record<DatabaseKind, DatabaseKindInfo> = {
     supportsHost: true,
     supportsAuth: true,
     supportsSsh: true,
-    supported: false
+    supported: true
   },
   mariadb: {
     kind: 'mariadb',
@@ -62,7 +63,20 @@ export const DATABASE_KIND_INFO: Record<DatabaseKind, DatabaseKindInfo> = {
     supportsHost: true,
     supportsAuth: true,
     supportsSsh: true,
-    supported: false
+    supported: true
+  },
+  clickhouse: {
+    kind: 'clickhouse',
+    name: 'ClickHouse',
+    aliases: ['ch', 'olap', 'column store', 'analytics'],
+    category: 'relational',
+    defaultPort: 8123,
+    defaultDatabase: 'default',
+    defaultUsername: 'default',
+    supportsHost: true,
+    supportsAuth: true,
+    supportsSsh: true,
+    supported: true
   },
   sqlite: {
     kind: 'sqlite',
@@ -88,7 +102,7 @@ export const DATABASE_KIND_INFO: Record<DatabaseKind, DatabaseKindInfo> = {
     supportsHost: true,
     supportsAuth: true,
     supportsSsh: true,
-    supported: false
+    supported: true
   },
   mongodb: {
     kind: 'mongodb',

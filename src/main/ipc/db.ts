@@ -1,33 +1,18 @@
 import { ipcMain } from 'electron'
 import net from 'node:net'
 import { randomUUID } from 'node:crypto'
-import { Client as PgClient, types as pgTypes } from 'pg'
 import { Client as SshClient } from 'ssh2'
-
-// Return date/time values as the raw DB text instead of JS Date, so timestamps
-// aren't silently shifted by the local timezone before they reach the grid.
-// 1082=date 1083=time 1114=timestamp 1184=timestamptz 1266=timetz
-for (const oid of [1082, 1083, 1114, 1184, 1266]) {
-  pgTypes.setTypeParser(oid, (v) => v)
-}
 import { connectConfig } from './ssh'
-import type {
-  Database,
-  Server,
-  Result,
-  QueryResult,
-  DbSchema,
-  SchemaNamespace,
-  RowChanges
-} from '@shared/types'
+import type { Database, Server, Result, QueryResult, DbSchema, RowChanges } from '@shared/types'
 import { getDatabaseKindInfo } from '@shared/databases'
+import { createDriver, type DbDriver } from './drivers'
 
 interface Tunnel {
   localPort: number
   close: () => void
 }
 interface Connection {
-  client: PgClient
+  driver: DbDriver
   tunnel?: Tunnel
 }
 
@@ -89,13 +74,10 @@ function createTunnel(server: Server, remoteHost: string, remotePort: number): P
   })
 }
 
-async function openConnection(
-  db: Database,
-  server?: Server
-): Promise<Connection> {
+async function openConnection(db: Database, server?: Server): Promise<Connection> {
   const info = getDatabaseKindInfo(db.kind)
   if (!info.supported) {
-    throw new Error(`${info.name} connections are not wired in this build yet.`)
+    throw new Error(`${info.name} connections are not available in this build yet.`)
   }
 
   let tunnel: Tunnel | undefined
@@ -107,22 +89,20 @@ async function openConnection(
     host = '127.0.0.1'
     port = tunnel.localPort
   }
-  const client = new PgClient({
-    host,
-    port,
-    database: db.database,
-    user: db.username,
-    password: db.password,
-    connectionTimeoutMillis: 12000,
-    statement_timeout: 0
-  })
+
   try {
-    await client.connect()
+    const driver = await createDriver(db.kind, {
+      host,
+      port,
+      database: db.database,
+      username: db.username,
+      password: db.password
+    })
+    return { driver, tunnel }
   } catch (e) {
     tunnel?.close()
-    throw new Error(`PostgreSQL: ${(e as Error).message}`)
+    throw e
   }
-  return { client, tunnel }
 }
 
 function cellToValue(v: unknown): string | number | boolean | null {
@@ -137,88 +117,6 @@ function cellToValue(v: unknown): string | number | boolean | null {
   }
 }
 
-async function introspect(client: PgClient): Promise<DbSchema> {
-  const map = new Map<string, SchemaNamespace>()
-  const bucket = (name: string): SchemaNamespace => {
-    let b = map.get(name)
-    if (!b) {
-      b = { name, tables: [], views: [], enums: [] }
-      map.set(name, b)
-    }
-    return b
-  }
-
-  const schemas = await client.query<{ schema_name: string }>(
-    `SELECT schema_name FROM information_schema.schemata
-     WHERE schema_name NOT LIKE 'pg_%' AND schema_name <> 'information_schema'`
-  )
-  for (const r of schemas.rows) bucket(r.schema_name)
-
-  const tables = await client.query<{ s: string; n: string; t: string }>(
-    `SELECT table_schema AS s, table_name AS n, table_type AS t
-     FROM information_schema.tables
-     WHERE table_schema NOT LIKE 'pg_%' AND table_schema <> 'information_schema'
-     ORDER BY table_name`
-  )
-  const tableIndex = new Map<string, { name: string; columns: never[] }>()
-  for (const r of tables.rows) {
-    const b = bucket(r.s)
-    const obj = { name: r.n, columns: [] as never[] }
-    if (r.t === 'VIEW') b.views.push(obj)
-    else b.tables.push(obj)
-    tableIndex.set(`${r.s}.${r.n}`, obj)
-  }
-
-  const pks = new Set<string>()
-  const pkRows = await client.query<{ s: string; t: string; c: string }>(
-    `SELECT tc.table_schema AS s, tc.table_name AS t, kcu.column_name AS c
-     FROM information_schema.table_constraints tc
-     JOIN information_schema.key_column_usage kcu
-       ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-     WHERE tc.constraint_type = 'PRIMARY KEY'`
-  )
-  for (const r of pkRows.rows) pks.add(`${r.s}.${r.t}.${r.c}`)
-
-  const cols = await client.query<{ s: string; t: string; c: string; d: string }>(
-    `SELECT table_schema AS s, table_name AS t, column_name AS c, data_type AS d
-     FROM information_schema.columns
-     WHERE table_schema NOT LIKE 'pg_%' AND table_schema <> 'information_schema'
-     ORDER BY ordinal_position`
-  )
-  for (const r of cols.rows) {
-    const obj = tableIndex.get(`${r.s}.${r.t}`)
-    if (obj)
-      (obj.columns as unknown as { name: string; type: string; pk: boolean }[]).push({
-        name: r.c,
-        type: r.d,
-        pk: pks.has(`${r.s}.${r.t}.${r.c}`)
-      })
-  }
-
-  const enums = await client.query<{ s: string; n: string; v: string }>(
-    `SELECT n.nspname AS s, t.typname AS n, e.enumlabel AS v
-     FROM pg_type t
-     JOIN pg_enum e ON t.oid = e.enumtypid
-     JOIN pg_namespace n ON n.oid = t.typnamespace
-     ORDER BY e.enumsortorder`
-  )
-  const enumIndex = new Map<string, { name: string; values: string[] }>()
-  for (const r of enums.rows) {
-    const key = `${r.s}.${r.n}`
-    let en = enumIndex.get(key)
-    if (!en) {
-      en = { name: r.n, values: [] }
-      enumIndex.set(key, en)
-      bucket(r.s).enums.push(en)
-    }
-    en.values.push(r.v)
-  }
-
-  return {
-    schemas: [...map.values()].sort((a, b) => a.name.localeCompare(b.name))
-  }
-}
-
 export function registerDbIpc(): void {
   ipcMain.handle(
     'db:test',
@@ -226,14 +124,13 @@ export function registerDbIpc(): void {
       let conn: Connection | undefined
       try {
         conn = await openConnection(db, server)
-        const res = await conn.client.query('SELECT version()')
-        const version = String(res.rows[0]?.version ?? 'PostgreSQL')
-        return { ok: true, data: version.split(',')[0] }
+        const version = await conn.driver.version()
+        return { ok: true, data: version }
       } catch (e) {
         return { ok: false, error: (e as Error).message }
       } finally {
         try {
-          await conn?.client.end()
+          await conn?.driver.close()
         } catch {
           /* ignore */
         }
@@ -249,7 +146,6 @@ export function registerDbIpc(): void {
         const conn = await openConnection(db, server)
         const id = randomUUID()
         connections.set(id, conn)
-        conn.client.on('error', () => disconnect(id))
         return { ok: true, data: id }
       } catch (e) {
         return { ok: false, error: (e as Error).message }
@@ -264,18 +160,16 @@ export function registerDbIpc(): void {
       if (!conn) return { ok: false, error: 'Not connected.' }
       try {
         const start = Date.now()
-        const res = await conn.client.query<unknown[]>({ text: sql, rowMode: 'array' })
+        const raw = await conn.driver.query(sql)
         const elapsedMs = Date.now() - start
-        const columns = (res.fields ?? []).map((f) => f.name)
-        const rows = (res.rows ?? []).map((row) => row.map(cellToValue))
         return {
           ok: true,
           data: {
-            columns,
-            rows,
-            rowCount: res.rowCount ?? rows.length,
+            columns: raw.columns,
+            rows: raw.rows.map((row) => row.map(cellToValue)),
+            rowCount: raw.rowCount,
             elapsedMs,
-            command: res.command
+            command: raw.command
           }
         }
       } catch (e) {
@@ -288,7 +182,7 @@ export function registerDbIpc(): void {
     const conn = connections.get(id)
     if (!conn) return { ok: false, error: 'Not connected.' }
     try {
-      return { ok: true, data: await introspect(conn.client) }
+      return { ok: true, data: await conn.driver.introspect() }
     } catch (e) {
       return { ok: false, error: (e as Error).message }
     }
@@ -302,55 +196,9 @@ export function registerDbIpc(): void {
     ): Promise<Result<{ updated: number; deleted: number }>> => {
       const conn = connections.get(id)
       if (!conn) return { ok: false, error: 'Not connected.' }
-      const client = conn.client
       try {
-        await client.query('BEGIN')
-        let updated = 0
-        let deleted = 0
-
-        for (const u of changes.updates) {
-          const setCols = Object.keys(u.set)
-          const whereCols = Object.keys(u.where)
-          if (!setCols.length || !whereCols.length) continue
-          const params: unknown[] = []
-          const setSql = setCols
-            .map((c) => {
-              params.push(u.set[c])
-              return `"${c}" = $${params.length}`
-            })
-            .join(', ')
-          const whereSql = whereCols
-            .map((c) => {
-              params.push(u.where[c])
-              return `"${c}" = $${params.length}`
-            })
-            .join(' AND ')
-          const res = await client.query(`UPDATE ${table} SET ${setSql} WHERE ${whereSql}`, params)
-          updated += res.rowCount ?? 0
-        }
-
-        for (const d of changes.deletes) {
-          const whereCols = Object.keys(d.where)
-          if (!whereCols.length) continue
-          const params: unknown[] = []
-          const whereSql = whereCols
-            .map((c) => {
-              params.push(d.where[c])
-              return `"${c}" = $${params.length}`
-            })
-            .join(' AND ')
-          const res = await client.query(`DELETE FROM ${table} WHERE ${whereSql}`, params)
-          deleted += res.rowCount ?? 0
-        }
-
-        await client.query('COMMIT')
-        return { ok: true, data: { updated, deleted } }
+        return { ok: true, data: await conn.driver.applyChanges(table, changes) }
       } catch (e) {
-        try {
-          await client.query('ROLLBACK')
-        } catch {
-          /* ignore */
-        }
         return { ok: false, error: (e as Error).message }
       }
     }
@@ -362,9 +210,7 @@ export function registerDbIpc(): void {
       const conn = connections.get(id)
       if (!conn) return { ok: false, error: 'Not connected.' }
       try {
-        await conn.client.query(
-          `SET SESSION default_transaction_read_only = ${readOnly ? 'on' : 'off'}`
-        )
+        await conn.driver.setReadOnly(readOnly)
         return { ok: true }
       } catch (e) {
         return { ok: false, error: (e as Error).message }
@@ -381,7 +227,7 @@ export function registerDbIpc(): void {
 function disconnect(id: string): void {
   const conn = connections.get(id)
   if (!conn) return
-  conn.client.end().catch(() => undefined)
+  conn.driver.close().catch(() => undefined)
   conn.tunnel?.close()
   connections.delete(id)
 }
