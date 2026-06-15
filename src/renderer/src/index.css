@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  * {
+    box-sizing: border-box;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    @apply bg-bg-base text-ink font-sans antialiased;
+    font-size: 13px;
+    user-select: none;
+    overflow: hidden;
+  }
+  input,
+  textarea {
+    user-select: text;
+  }
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2f343d;
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3b414c;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* CodeMirror fills its container */
+.cm-editor {
+  height: 100%;
+  font-size: 13px;
+}
+.cm-editor.cm-focused {
+  outline: none;
+}
+.cm-scroller {
+  font-family: 'Cascadia Mono', 'JetBrains Mono', Consolas, monospace;
+}
+
+/* xterm padding */
+.xterm {
+  padding: 8px;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed select-none;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-hover;
+  }
+  .btn-ghost {
+    @apply btn bg-bg-elevated text-ink hover:bg-bg-hover border border-line;
+  }
+  .btn-danger {
+    @apply btn bg-bad/90 text-white hover:bg-bad;
+  }
+  .btn-sm {
+    @apply px-2.5 py-1 text-xs rounded-md;
+  }
+  .field-input {
+    @apply w-full rounded-lg bg-bg-input border border-line px-3 py-2 text-[13px] text-ink
+           placeholder:text-ink-faint outline-none focus:border-accent transition-colors;
+  }
+}
