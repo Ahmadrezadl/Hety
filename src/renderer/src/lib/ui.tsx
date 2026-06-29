@@ -1,6 +1,6 @@
-import { type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes } from 'react'
+import { useState, type ReactNode, type ButtonHTMLAttributes, type InputHTMLAttributes } from 'react'
 import clsx from 'clsx'
-import { X, Folder } from 'lucide-react'
+import { X, Folder, Eye, EyeOff, Copy, ClipboardPaste } from 'lucide-react'
 
 export const cn = clsx
 
@@ -61,6 +61,52 @@ export function IconButton({ className, ...rest }: IconBtnProps): ReactNode {
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>): ReactNode {
   return <input {...props} className={cn('field-input', props.className)} />
+}
+
+/** Password field with an eye toggle to reveal the value. */
+export function PasswordInput({ className, ...props }: InputHTMLAttributes<HTMLInputElement>): ReactNode {
+  const [show, setShow] = useState(false)
+  return (
+    <div className="relative">
+      <input
+        {...props}
+        type={show ? 'text' : 'password'}
+        className={cn('field-input pr-9', className)}
+      />
+      <button
+        type="button"
+        tabIndex={-1}
+        title={show ? 'Hide' : 'Reveal'}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setShow((s) => !s)}
+        className="absolute right-1 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-ink-faint hover:bg-bg-hover hover:text-ink"
+      >
+        {show ? <EyeOff size={15} /> : <Eye size={15} />}
+      </button>
+    </div>
+  )
+}
+
+/** A Copy / Paste pair for transferring a connection profile as JSON. */
+export function ConfigActions({
+  onCopy,
+  onPaste
+}: {
+  onCopy: () => void
+  onPaste: () => void
+}): ReactNode {
+  const cls =
+    'flex items-center gap-1 rounded-md border border-line bg-bg-input px-2 py-1 text-[11px] font-semibold text-ink-soft hover:bg-bg-hover hover:text-ink'
+  return (
+    <div className="flex items-center justify-end gap-1.5">
+      <button type="button" onClick={onCopy} className={cls} title="Copy this config as JSON">
+        <Copy size={12} /> Copy config
+      </button>
+      <button type="button" onClick={onPaste} className={cls} title="Fill the form from a copied config">
+        <ClipboardPaste size={12} /> Paste config
+      </button>
+    </div>
+  )
 }
 
 export function Field({

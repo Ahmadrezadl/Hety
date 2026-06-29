@@ -2,7 +2,9 @@ import { useState, type ReactNode } from 'react'
 import { FileKey } from 'lucide-react'
 import type { Server, AuthType } from '@shared/types'
 import { useApp, newId } from '../../store'
-import { Button, Field, Input, Modal, ColorPicker } from '../../lib/ui'
+import { Button, Field, Input, PasswordInput, Modal, ColorPicker, ConfigActions } from '../../lib/ui'
+import { copyText } from '../../lib/format'
+import { toast } from '../../lib/toast'
 
 export default function ServerDialog({
   projectId,
@@ -47,9 +49,44 @@ export default function ServerDialog({
     if (p) setKeyPath(p)
   }
 
+  const copyConfig = async (): Promise<void> => {
+    const config = {
+      type: 'hety.server',
+      name: name.trim(),
+      host: host.trim(),
+      port: Number(port) || 22,
+      username: username.trim(),
+      authType,
+      password,
+      keyPath,
+      keyPassphrase
+    }
+    await copyText(JSON.stringify(config, null, 2))
+    toast.success('Server config copied to clipboard')
+  }
+
+  const pasteConfig = async (): Promise<void> => {
+    try {
+      const c = JSON.parse(await navigator.clipboard.readText())
+      if (!c || typeof c !== 'object') throw new Error('not an object')
+      if (typeof c.name === 'string') setName(c.name)
+      if (typeof c.host === 'string') setHost(c.host)
+      if (c.port !== undefined) setPort(Number(c.port) || 22)
+      if (typeof c.username === 'string') setUsername(c.username)
+      if (c.authType === 'password' || c.authType === 'key') setAuthType(c.authType)
+      if (typeof c.password === 'string') setPassword(c.password)
+      if (typeof c.keyPath === 'string') setKeyPath(c.keyPath)
+      if (typeof c.keyPassphrase === 'string') setKeyPassphrase(c.keyPassphrase)
+      toast.success('Server config pasted from clipboard')
+    } catch {
+      toast.error('Clipboard does not contain a valid server config')
+    }
+  }
+
   return (
     <Modal title={server ? 'Edit server' : 'Add SSH server'} onClose={onClose}>
       <div className="space-y-4">
+        <ConfigActions onCopy={copyConfig} onPaste={pasteConfig} />
         <Field label="Display name">
           <Input autoFocus placeholder="Production web" value={name} onChange={(e) => setName(e.target.value)} />
         </Field>
@@ -89,11 +126,7 @@ export default function ServerDialog({
 
         {authType === 'password' ? (
           <Field label="Password">
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+            <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
           </Field>
         ) : (
           <>
@@ -106,8 +139,7 @@ export default function ServerDialog({
               </div>
             </Field>
             <Field label="Key passphrase (optional)">
-              <Input
-                type="password"
+              <PasswordInput
                 value={keyPassphrase}
                 onChange={(e) => setKeyPassphrase(e.target.value)}
               />

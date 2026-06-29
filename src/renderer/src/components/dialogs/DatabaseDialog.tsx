@@ -4,7 +4,19 @@ import type { Database, Project } from '@shared/types'
 import type { DatabaseKind, DatabaseKindInfo } from '@shared/databases'
 import { DATABASE_KIND_LIST, getDatabaseKindInfo } from '@shared/databases'
 import { useApp, newId } from '../../store'
-import { Button, Field, Input, Modal, Spinner, ColorPicker, cn } from '../../lib/ui'
+import {
+  Button,
+  Field,
+  Input,
+  PasswordInput,
+  Modal,
+  Spinner,
+  ColorPicker,
+  ConfigActions,
+  cn
+} from '../../lib/ui'
+import { copyText } from '../../lib/format'
+import { toast } from '../../lib/toast'
 import DatabaseLogo from '../db/DatabaseLogo'
 
 type Step = 'kind' | 'details'
@@ -68,6 +80,42 @@ export default function DatabaseDialog({
     createdAt: database?.createdAt ?? Date.now()
   })
 
+  const copyConfig = async (): Promise<void> => {
+    const config = {
+      type: 'hety.database',
+      name: name.trim(),
+      kind,
+      host: host.trim(),
+      port: Number(port) || kindInfo.defaultPort,
+      database: dbName.trim(),
+      username: username.trim(),
+      password,
+      useSsh
+    }
+    await copyText(JSON.stringify(config, null, 2))
+    toast.success('Database config copied to clipboard')
+  }
+
+  const pasteConfig = async (): Promise<void> => {
+    try {
+      const c = JSON.parse(await navigator.clipboard.readText())
+      if (!c || typeof c !== 'object') throw new Error('not an object')
+      if (typeof c.kind === 'string' && getDatabaseKindInfo(c.kind).kind === c.kind) setKind(c.kind)
+      if (typeof c.name === 'string') setName(c.name)
+      if (typeof c.host === 'string') setHost(c.host)
+      if (c.port !== undefined) setPort(Number(c.port) || port)
+      if (typeof c.database === 'string') setDbName(c.database)
+      if (typeof c.username === 'string') setUsername(c.username)
+      if (typeof c.password === 'string') setPassword(c.password)
+      if (typeof c.useSsh === 'boolean') setUseSsh(c.useSsh)
+      setResult(null)
+      setForceSave(false)
+      toast.success('Database config pasted from clipboard')
+    } catch {
+      toast.error('Clipboard does not contain a valid database config')
+    }
+  }
+
   const test = async (): Promise<boolean> => {
     if (!kindInfo.supported) {
       setResult({
@@ -128,6 +176,7 @@ export default function DatabaseDialog({
   return (
     <Modal title={database ? 'Edit database' : 'Add database'} onClose={onClose} width={600}>
       <div className="space-y-4">
+        <ConfigActions onCopy={copyConfig} onPaste={pasteConfig} />
         <div className="flex items-center gap-3 rounded-lg border border-line bg-bg-elevated px-3 py-2">
           {!database && (
             <button
@@ -189,7 +238,7 @@ export default function DatabaseDialog({
               <Input value={username} onChange={(e) => setUsername(e.target.value)} />
             </Field>
             <Field label="Password">
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+              <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
             </Field>
           </div>
         )}

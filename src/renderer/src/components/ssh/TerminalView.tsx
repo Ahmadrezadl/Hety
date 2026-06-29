@@ -73,9 +73,10 @@ export default function TerminalView({
           return false
         }
         if (e.code === 'KeyV') {
-          void navigator.clipboard.readText().then((text) => {
-            if (text && idRef.current) window.api.ssh.input(idRef.current, text)
-          })
+          // Don't paste here: returning false stops xterm from emitting a
+          // literal ^V, and the browser's native paste event still fires once
+          // and feeds the clipboard through term.onData. Reading the clipboard
+          // ourselves on top of that pasted the text twice.
           return false
         }
       }
