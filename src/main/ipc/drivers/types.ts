@@ -12,7 +12,10 @@ export interface RawResult {
 export interface DbDriver {
   query(sql: string): Promise<RawResult>
   introspect(): Promise<DbSchema>
-  applyChanges(table: string, changes: RowChanges): Promise<{ updated: number; deleted: number }>
+  applyChanges(
+    table: string,
+    changes: RowChanges
+  ): Promise<{ inserted: number; updated: number; deleted: number }>
   setReadOnly(readOnly: boolean): Promise<void>
   version(): Promise<string>
   close(): Promise<void>

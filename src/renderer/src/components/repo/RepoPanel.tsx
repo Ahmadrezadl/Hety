@@ -31,7 +31,8 @@ import {
   Copy,
   Pencil,
   Trash2,
-  FolderTree
+  FolderTree,
+  Archive
 } from 'lucide-react'
 import type {
   Project,
@@ -39,6 +40,7 @@ import type {
   GitStatus,
   GitFile,
   GitGraphCommit,
+  GitStash,
   MergeMode
 } from '@shared/types'
 import { useApp, newId } from '../../store'
@@ -230,6 +232,7 @@ export default function RepoPanel({ project }: { project: Project }): ReactNode 
 function RepoView({ path, onPickFolder }: { path: string; onPickFolder: () => void }): ReactNode {
   const [status, setStatus] = useState<GitStatus | null>(null)
   const [graph, setGraph] = useState<GitGraphCommit[]>([])
+  const [stashes, setStashes] = useState<GitStash[]>([])
   const [busy, setBusy] = useState(false)
   const [view, setView] = useState<'changes' | 'commits'>('commits')
   const [filter, setFilter] = useState('')
@@ -244,18 +247,32 @@ function RepoView({ path, onPickFolder }: { path: string; onPickFolder: () => vo
     label: string
     initial: string
     confirmLabel: string
+    allowEmpty?: boolean
     onSubmit: (v: string) => void
   } | null>(null)
 
   const refresh = useCallback(async () => {
     if (!path) return
-    const [st, gr] = await Promise.all([window.api.git.status(path), window.api.git.graphLog(path)])
+    const [st, gr, stash] = await Promise.all([
+      window.api.git.status(path),
+      window.api.git.graphLog(path),
+      window.api.git.stashList(path)
+    ])
     if (st.ok && st.data) setStatus(st.data)
     if (gr.ok && gr.data) setGraph(gr.data)
+    if (stash.ok && stash.data) setStashes(stash.data)
   }, [path])
 
   useEffect(() => {
     refresh()
+  }, [refresh])
+
+  // Re-sync when the window regains focus, so changes made in an external
+  // editor or terminal show up without manually switching views.
+  useEffect(() => {
+    const onFocus = (): void => void refresh()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
   }, [refresh])
 
   const run = async (
@@ -320,6 +337,32 @@ function RepoView({ path, onPickFolder }: { path: string; onPickFolder: () => vo
   }
   const checkoutRemote = (ref: string): void => {
     run(() => window.api.git.checkoutRemote(path, ref), `Checked out ${ref}`)
+  }
+
+  const openStashPrompt = (): void => {
+    if (changeCount === 0) {
+      toast.info('No local changes to stash.')
+      return
+    }
+    setPrompt({
+      title: 'Stash changes',
+      label: 'Optional message',
+      initial: '',
+      confirmLabel: 'Stash',
+      allowEmpty: true,
+      onSubmit: (v) => {
+        setPrompt(null)
+        run(() => window.api.git.stashPush(path, v, true), 'Stashed changes')
+      }
+    })
+  }
+  const applyStash = (ref: string): void =>
+    void run(() => window.api.git.stashApply(path, ref), 'Applied stash')
+  const popStash = (ref: string): void =>
+    void run(() => window.api.git.stashPop(path, ref), 'Popped stash')
+  const dropStash = (ref: string): void => {
+    if (confirm(`Drop ${ref}? This cannot be undone.`))
+      void run(() => window.api.git.stashDrop(path, ref), 'Dropped stash')
   }
 
   const onMergeConfirm = (source: string, into: string, mode: MergeMode): void => {
@@ -436,6 +479,13 @@ function RepoView({ path, onPickFolder }: { path: string; onPickFolder: () => vo
           onClick={() => run(() => window.api.git.push(path), 'Pushed')}
         />
         <div className="mx-1 h-5 w-px bg-line" />
+        <ToolbarBtn
+          icon={<Archive size={15} />}
+          label="Stash"
+          badge={stashes.length || undefined}
+          onClick={openStashPrompt}
+        />
+        <div className="mx-1 h-5 w-px bg-line" />
         <span className="flex items-center gap-1.5 px-1 text-[12px] font-semibold text-ink">
           <GitBranch size={14} className="text-accent" />
           {status?.branch || 'detached HEAD'}
@@ -499,6 +549,12 @@ function RepoView({ path, onPickFolder }: { path: string; onPickFolder: () => vo
                 graph={graph}
               />
             )}
+            <StashList
+              stashes={stashes}
+              onApply={applyStash}
+              onPop={popStash}
+              onDrop={dropStash}
+            />
           </div>
         </aside>
 
@@ -583,6 +639,7 @@ function RepoView({ path, onPickFolder }: { path: string; onPickFolder: () => vo
           label={prompt.label}
           initial={prompt.initial}
           confirmLabel={prompt.confirmLabel}
+          allowEmpty={prompt.allowEmpty}
           onClose={() => setPrompt(null)}
           onSubmit={prompt.onSubmit}
         />
@@ -869,7 +926,71 @@ function Empty(): ReactNode {
   return <div className="px-6 py-1 text-[11px] text-ink-faint">None</div>
 }
 
+// ---- Stashes ----
+
+function StashList({
+  stashes,
+  onApply,
+  onPop,
+  onDrop
+}: {
+  stashes: GitStash[]
+  onApply: (ref: string) => void
+  onPop: (ref: string) => void
+  onDrop: (ref: string) => void
+}): ReactNode {
+  const [open, setOpen] = useState(true)
+  return (
+    <TreeSection
+      label="Stashes"
+      count={stashes.length}
+      open={open}
+      onToggle={() => setOpen((o) => !o)}
+    >
+      {stashes.length ? (
+        stashes.map((s) => (
+          <div
+            key={s.ref}
+            title={`${s.ref}${s.branch ? ` · on ${s.branch}` : ''}: ${s.message}`}
+            className="group flex items-center gap-1.5 rounded-md py-[3px] pl-6 pr-2 text-[12px] text-ink-soft hover:bg-bg-hover"
+          >
+            <Archive size={12} className="shrink-0 text-ink-faint" />
+            <span className="min-w-0 flex-1 truncate">{s.message || s.ref}</span>
+            <div className="flex shrink-0 items-center gap-1 opacity-0 group-hover:opacity-100">
+              <button
+                className="rounded px-1 py-0.5 text-[11px] font-semibold text-accent hover:bg-bg-elevated"
+                title="Apply (keep stash)"
+                onClick={() => onApply(s.ref)}
+              >
+                Apply
+              </button>
+              <button
+                className="rounded px-1 py-0.5 text-[11px] font-semibold text-ink-soft hover:bg-bg-elevated hover:text-ink"
+                title="Pop (apply and drop)"
+                onClick={() => onPop(s.ref)}
+              >
+                Pop
+              </button>
+              <button
+                className="rounded p-0.5 text-ink-faint hover:bg-bg-elevated hover:text-bad"
+                title="Drop stash"
+                onClick={() => onDrop(s.ref)}
+              >
+                <X size={11} />
+              </button>
+            </div>
+          </div>
+        ))
+      ) : (
+        <Empty />
+      )}
+    </TreeSection>
+  )
+}
+
 // ---- Local Changes view ----
+
+type ListKey = 'unstaged' | 'staged'
 
 function LocalChangesView({
   path,
@@ -882,31 +1003,103 @@ function LocalChangesView({
   busy: boolean
   run: (fn: () => Promise<{ ok: boolean; error?: string }>, okMsg?: string) => Promise<void>
 }): ReactNode {
-  const [sel, setSel] = useState<{ file: string; staged: boolean; untracked: boolean } | null>(null)
+  // Multi-selection: a set of paths, the list they belong to, and an anchor
+  // (drives the diff pane and acts as the base for shift-range selection).
+  const [selFiles, setSelFiles] = useState<Set<string>>(new Set())
+  const [activeList, setActiveList] = useState<ListKey | null>(null)
+  const [anchor, setAnchor] = useState<string | null>(null)
   const [diff, setDiff] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
 
   const unstaged = status?.unstaged ?? []
   const staged = status?.staged ?? []
+  const listFor = (k: ListKey): GitFile[] => (k === 'staged' ? staged : unstaged)
 
-  // Keep the current selection valid as files change.
+  // Keep the selection valid as files move between/leave the lists.
   useEffect(() => {
-    if (!sel) return
-    const list = sel.staged ? staged : unstaged
-    if (!list.some((f) => f.path === sel.file)) setSel(null)
+    if (!activeList) return
+    const valid = new Set(listFor(activeList).map((f) => f.path))
+    setSelFiles((prev) => {
+      const next = new Set([...prev].filter((p) => valid.has(p)))
+      return next.size === prev.size ? prev : next
+    })
+    setAnchor((a) => (a && valid.has(a) ? a : null))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status])
 
+  const selectRow = (list: ListKey, file: GitFile, e: MouseEvent): void => {
+    const ctrl = e.ctrlKey || e.metaKey
+    const shift = e.shiftKey
+    const order = listFor(list).map((f) => f.path)
+    if (activeList !== list) {
+      setActiveList(list)
+      setSelFiles(new Set([file.path]))
+      setAnchor(file.path)
+      return
+    }
+    if (shift && anchor) {
+      const a = order.indexOf(anchor)
+      const b = order.indexOf(file.path)
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a <= b ? [a, b] : [b, a]
+        setSelFiles(new Set(order.slice(lo, hi + 1)))
+        return
+      }
+    }
+    if (ctrl) {
+      setSelFiles((prev) => {
+        const n = new Set(prev)
+        if (n.has(file.path)) n.delete(file.path)
+        else n.add(file.path)
+        return n
+      })
+      setAnchor(file.path)
+      return
+    }
+    setSelFiles(new Set([file.path]))
+    setAnchor(file.path)
+  }
+
+  // Ctrl/Cmd+A selects every file in the active list (or unstaged by default).
   useEffect(() => {
-    if (!sel) {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'a') return
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
+      const list: ListKey | null =
+        activeList ?? (unstaged.length ? 'unstaged' : staged.length ? 'staged' : null)
+      if (!list) return
+      e.preventDefault()
+      const files = list === 'staged' ? staged : unstaged
+      setActiveList(list)
+      setSelFiles(new Set(files.map((f) => f.path)))
+      setAnchor((a) => (a && files.some((f) => f.path === a) ? a : files[0]?.path ?? null))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [activeList, unstaged, staged])
+
+  // When the clicked row is part of the current selection, act on the whole
+  // selection; otherwise just that one row.
+  const resolveTargets = (list: ListKey, file: string): string[] =>
+    activeList === list && selFiles.has(file) ? [...selFiles] : [file]
+
+  useEffect(() => {
+    if (!activeList || !anchor) {
+      setDiff(null)
+      return
+    }
+    const file = listFor(activeList).find((f) => f.path === anchor)
+    if (!file) {
       setDiff(null)
       return
     }
     let cancel = false
     setLoading(true)
+    const isStaged = activeList === 'staged'
     window.api.git
-      .diff(path, { file: sel.file, staged: sel.staged, untracked: sel.untracked })
+      .diff(path, { file: file.path, staged: isStaged, untracked: !isStaged && file.code === '?' })
       .then((r) => {
         if (cancel) return
         setLoading(false)
@@ -915,7 +1108,8 @@ function LocalChangesView({
     return () => {
       cancel = true
     }
-  }, [path, sel])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path, activeList, anchor, status])
 
   const doCommit = (push: boolean): void => {
     const msg = message.trim()
@@ -946,11 +1140,13 @@ function LocalChangesView({
             allLabel="Stage all"
             secondaryLabel="Discard"
             onSecondary={(files) =>
-              confirm(`Discard changes to ${files.join(', ')}?`) &&
+              confirm(`Discard changes to ${files.length} file(s)?\n\n${files.join('\n')}`) &&
               run(() => window.api.git.discard(path, files))
             }
-            selectedFile={sel && !sel.staged ? sel.file : null}
-            onSelect={(f) => setSel({ file: f.path, staged: false, untracked: f.code === '?' })}
+            selectedFiles={selFiles}
+            isActiveList={activeList === 'unstaged'}
+            onRowClick={(f, e) => selectRow('unstaged', f, e)}
+            resolve={(file) => resolveTargets('unstaged', file)}
           />
           <ChangeList
             title="Staged"
@@ -959,8 +1155,10 @@ function LocalChangesView({
             onAction={(files) => run(() => window.api.git.unstage(path, files))}
             onAll={staged.length ? () => run(() => window.api.git.unstageAll(path)) : undefined}
             allLabel="Unstage all"
-            selectedFile={sel && sel.staged ? sel.file : null}
-            onSelect={(f) => setSel({ file: f.path, staged: true, untracked: false })}
+            selectedFiles={selFiles}
+            isActiveList={activeList === 'staged'}
+            onRowClick={(f, e) => selectRow('staged', f, e)}
+            resolve={(file) => resolveTargets('staged', file)}
           />
         </div>
         <div className="border-t border-line p-2.5">
@@ -998,7 +1196,16 @@ function LocalChangesView({
       {/* diff */}
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="truncate border-b border-line bg-bg-panel px-3 py-1.5 font-mono text-[11px] text-ink-soft">
-          {sel ? sel.file : 'No file selected'}
+          {anchor ? (
+            <>
+              {anchor}
+              {selFiles.size > 1 && (
+                <span className="text-ink-faint"> · {selFiles.size} selected</span>
+              )}
+            </>
+          ) : (
+            'No file selected'
+          )}
         </div>
         <div className="min-h-0 flex-1">
           <DiffView diff={diff} loading={loading} empty="Select a changed file to view its diff." />
@@ -1017,8 +1224,10 @@ function ChangeList({
   allLabel,
   secondaryLabel,
   onSecondary,
-  selectedFile,
-  onSelect
+  selectedFiles,
+  isActiveList,
+  onRowClick,
+  resolve
 }: {
   title: string
   files: GitFile[]
@@ -1028,14 +1237,18 @@ function ChangeList({
   allLabel: string
   secondaryLabel?: string
   onSecondary?: (files: string[]) => void
-  selectedFile: string | null
-  onSelect: (f: GitFile) => void
+  selectedFiles: Set<string>
+  isActiveList: boolean
+  onRowClick: (f: GitFile, e: MouseEvent) => void
+  resolve: (file: string) => string[]
 }): ReactNode {
+  const selectedHere = isActiveList ? files.filter((f) => selectedFiles.has(f.path)).length : 0
   return (
     <div>
       <div className="sticky top-0 z-10 flex items-center justify-between bg-bg-panel px-3 py-1.5">
         <span className="text-[11px] font-bold uppercase tracking-wider text-ink-faint">
           {title} {files.length > 0 && <span className="text-ink-soft">({files.length})</span>}
+          {selectedHere > 1 && <span className="text-accent"> · {selectedHere} selected</span>}
         </span>
         {onAll && (
           <button className="text-[11px] font-semibold text-accent hover:text-accent-hover" onClick={onAll}>
@@ -1048,13 +1261,14 @@ function ChangeList({
       ) : (
         files.map((f) => {
           const { dir, name } = splitPath(f.path)
+          const selected = isActiveList && selectedFiles.has(f.path)
           return (
             <div
               key={f.path}
-              onClick={() => onSelect(f)}
+              onClick={(e) => onRowClick(f, e)}
               className={cn(
-                'group flex cursor-pointer items-center gap-2 px-3 py-1',
-                selectedFile === f.path ? 'bg-accent-dim' : 'hover:bg-bg-hover'
+                'group flex cursor-pointer select-none items-center gap-2 px-3 py-1',
+                selected ? 'bg-accent-dim' : 'hover:bg-bg-hover'
               )}
             >
               <span
@@ -1073,7 +1287,7 @@ function ChangeList({
                     className="rounded px-1.5 py-0.5 text-[11px] font-semibold text-ink-soft hover:bg-bg-hover hover:text-bad"
                     onClick={(e) => {
                       e.stopPropagation()
-                      onSecondary([f.path])
+                      onSecondary(resolve(f.path))
                     }}
                   >
                     {secondaryLabel}
@@ -1083,7 +1297,7 @@ function ChangeList({
                   className="rounded px-1.5 py-0.5 text-[11px] font-semibold text-accent hover:bg-bg-hover"
                   onClick={(e) => {
                     e.stopPropagation()
-                    onAction([f.path])
+                    onAction(resolve(f.path))
                   }}
                 >
                   {actionLabel}
@@ -1518,6 +1732,7 @@ function TextPromptModal({
   label,
   initial,
   confirmLabel,
+  allowEmpty,
   onClose,
   onSubmit
 }: {
@@ -1525,10 +1740,12 @@ function TextPromptModal({
   label: string
   initial: string
   confirmLabel: string
+  allowEmpty?: boolean
   onClose: () => void
   onSubmit: (v: string) => void
 }): ReactNode {
   const [v, setV] = useState(initial)
+  const canSubmit = allowEmpty || !!v.trim()
   return (
     <Modal title={title} width={420} onClose={onClose}>
       <div className="space-y-3">
@@ -1538,7 +1755,7 @@ function TextPromptModal({
             value={v}
             onChange={(e) => setV(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && v.trim()) onSubmit(v.trim())
+              if (e.key === 'Enter' && canSubmit) onSubmit(v.trim())
             }}
           />
         </Field>
@@ -1546,7 +1763,7 @@ function TextPromptModal({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={!v.trim()} onClick={() => onSubmit(v.trim())}>
+          <Button disabled={!canSubmit} onClick={() => onSubmit(v.trim())}>
             {confirmLabel}
           </Button>
         </div>

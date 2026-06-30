@@ -74,7 +74,7 @@ export async function createClickHouse(p: ConnectParams): Promise<DbDriver> {
       return { columns: [], rows: [], rowCount: 0, command: 'OK' }
     },
     introspect: () => introspect(client, p.database),
-    applyChanges: async (): Promise<{ updated: number; deleted: number }> => {
+    applyChanges: async (): Promise<{ inserted: number; updated: number; deleted: number }> => {
       throw new Error('Row editing is not supported for ClickHouse.')
     },
     setReadOnly: async (): Promise<void> => {

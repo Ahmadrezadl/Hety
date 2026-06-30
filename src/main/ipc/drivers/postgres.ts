@@ -93,11 +93,27 @@ async function applyChanges(
   client: Client,
   table: string,
   changes: RowChanges
-): Promise<{ updated: number; deleted: number }> {
+): Promise<{ inserted: number; updated: number; deleted: number }> {
   await client.query('BEGIN')
   try {
+    let inserted = 0
     let updated = 0
     let deleted = 0
+
+    for (const ins of changes.inserts ?? []) {
+      const cols = Object.keys(ins.values)
+      if (!cols.length) continue
+      const params: unknown[] = []
+      const colSql = cols.map((c) => `"${c}"`).join(', ')
+      const valSql = cols
+        .map((c) => {
+          params.push(ins.values[c])
+          return `$${params.length}`
+        })
+        .join(', ')
+      const res = await client.query(`INSERT INTO ${table} (${colSql}) VALUES (${valSql})`, params)
+      inserted += res.rowCount ?? 0
+    }
 
     for (const u of changes.updates) {
       const setCols = Object.keys(u.set)
@@ -135,7 +151,7 @@ async function applyChanges(
     }
 
     await client.query('COMMIT')
-    return { updated, deleted }
+    return { inserted, updated, deleted }
   } catch (e) {
     try {
       await client.query('ROLLBACK')

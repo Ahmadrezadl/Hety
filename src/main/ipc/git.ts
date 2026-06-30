@@ -2,7 +2,15 @@ import { ipcMain } from 'electron'
 import { existsSync, promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import simpleGit, { type SimpleGit } from 'simple-git'
-import type { GitStatus, GitFile, GitCommit, GitGraphCommit, MergeMode, Result } from '@shared/types'
+import type {
+  GitStatus,
+  GitFile,
+  GitCommit,
+  GitGraphCommit,
+  GitStash,
+  MergeMode,
+  Result
+} from '@shared/types'
 
 function git(path: string): SimpleGit {
   return simpleGit(path)
@@ -183,6 +191,29 @@ async function diff(path: string, p: DiffParams): Promise<string> {
   return g.raw(['diff', '--no-color', '--', p.file])
 }
 
+async function stashList(path: string): Promise<GitStash[]> {
+  try {
+    // %gd = reflog selector (stash@{0}); %gs = reflog subject.
+    const raw = await git(path).raw(['stash', 'list', `--pretty=format:%gd${GU}%gs`])
+    return raw
+      .split('\n')
+      .map((l) => l.replace(/\r$/, ''))
+      .filter((l) => l.trim().length > 0)
+      .map((line, i) => {
+        const [ref, subject] = line.split(GU)
+        const m = (subject ?? '').match(/^(?:WIP on|On) ([^:]+):\s?(.*)$/)
+        return {
+          index: i,
+          ref: ref ?? `stash@{${i}}`,
+          branch: m?.[1] ?? '',
+          message: (m?.[2] || subject || '').trim()
+        }
+      })
+  } catch {
+    return []
+  }
+}
+
 function humanize(ms: number): string {
   const s = Math.floor(ms / 1000)
   if (s < 60) return 'just now'
@@ -212,6 +243,41 @@ export function registerGitIpc(): void {
   )
   ipcMain.handle('git:diff', (_e, { path, ...params }: { path: string } & DiffParams) =>
     wrap(() => diff(path, params))
+  )
+
+  ipcMain.handle('git:stashList', (_e, path: string) => wrap(() => stashList(path)))
+  ipcMain.handle(
+    'git:stashPush',
+    (
+      _e,
+      {
+        path,
+        message,
+        includeUntracked
+      }: { path: string; message?: string; includeUntracked?: boolean }
+    ) =>
+      wrap(async () => {
+        const args = ['stash', 'push']
+        if (includeUntracked) args.push('-u')
+        if (message && message.trim()) args.push('-m', message.trim())
+        const out = await git(path).raw(args)
+        if (/No local changes to save/i.test(out)) throw new Error('No local changes to stash.')
+      })
+  )
+  ipcMain.handle('git:stashApply', (_e, { path, ref }: { path: string; ref: string }) =>
+    wrap(async () => {
+      await git(path).raw(['stash', 'apply', ref])
+    })
+  )
+  ipcMain.handle('git:stashPop', (_e, { path, ref }: { path: string; ref: string }) =>
+    wrap(async () => {
+      await git(path).raw(['stash', 'pop', ref])
+    })
+  )
+  ipcMain.handle('git:stashDrop', (_e, { path, ref }: { path: string; ref: string }) =>
+    wrap(async () => {
+      await git(path).raw(['stash', 'drop', ref])
+    })
   )
 
   ipcMain.handle('git:stage', (_e, { path, files }: { path: string; files: string[] }) =>

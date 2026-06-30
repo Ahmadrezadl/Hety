@@ -61,12 +61,30 @@ async function applyChanges(
   pool: sql.ConnectionPool,
   table: string,
   changes: RowChanges
-): Promise<{ updated: number; deleted: number }> {
+): Promise<{ inserted: number; updated: number; deleted: number }> {
   const tx = new sql.Transaction(pool)
   await tx.begin()
   try {
+    let inserted = 0
     let updated = 0
     let deleted = 0
+
+    for (const ins of changes.inserts ?? []) {
+      const cols = Object.keys(ins.values)
+      if (!cols.length) continue
+      const req = new sql.Request(tx)
+      let i = 0
+      const colSql = cols.map((c) => q(c)).join(', ')
+      const valSql = cols
+        .map((c) => {
+          const pn = `p${i++}`
+          req.input(pn, ins.values[c])
+          return `@${pn}`
+        })
+        .join(', ')
+      const res = await req.query(`INSERT INTO ${table} (${colSql}) VALUES (${valSql})`)
+      inserted += sumAffected(res.rowsAffected)
+    }
 
     for (const u of changes.updates) {
       const setCols = Object.keys(u.set)
@@ -109,7 +127,7 @@ async function applyChanges(
     }
 
     await tx.commit()
-    return { updated, deleted }
+    return { inserted, updated, deleted }
   } catch (e) {
     await tx.rollback().catch(() => undefined)
     throw e

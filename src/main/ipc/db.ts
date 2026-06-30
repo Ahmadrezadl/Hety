@@ -193,7 +193,7 @@ export function registerDbIpc(): void {
     async (
       _e,
       { id, table, changes }: { id: string; table: string; changes: RowChanges }
-    ): Promise<Result<{ updated: number; deleted: number }>> => {
+    ): Promise<Result<{ inserted: number; updated: number; deleted: number }>> => {
       const conn = connections.get(id)
       if (!conn) return { ok: false, error: 'Not connected.' }
       try {

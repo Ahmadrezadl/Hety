@@ -56,11 +56,25 @@ async function applyChanges(
   conn: mysql.Connection,
   table: string,
   changes: RowChanges
-): Promise<{ updated: number; deleted: number }> {
+): Promise<{ inserted: number; updated: number; deleted: number }> {
   await conn.beginTransaction()
   try {
+    let inserted = 0
     let updated = 0
     let deleted = 0
+
+    for (const ins of changes.inserts ?? []) {
+      const cols = Object.keys(ins.values)
+      if (!cols.length) continue
+      const params = cols.map((c) => ins.values[c])
+      const colSql = cols.map((c) => q(c)).join(', ')
+      const valSql = cols.map(() => '?').join(', ')
+      const [res] = await conn.query(
+        `INSERT INTO ${table} (${colSql}) VALUES (${valSql})`,
+        params
+      )
+      inserted += (res as mysql.ResultSetHeader).affectedRows ?? 0
+    }
 
     for (const u of changes.updates) {
       const setCols = Object.keys(u.set)
@@ -98,7 +112,7 @@ async function applyChanges(
     }
 
     await conn.commit()
-    return { updated, deleted }
+    return { inserted, updated, deleted }
   } catch (e) {
     await conn.rollback().catch(() => undefined)
     throw e

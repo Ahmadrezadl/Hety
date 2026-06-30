@@ -11,7 +11,9 @@ import {
   Search,
   Lock,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  Plus,
+  X
 } from 'lucide-react'
 import type { QueryResult, SchemaColumn, RowChanges } from '@shared/types'
 import { toCsv, toTsv, toMarkdown, copyText, cellString } from '../../lib/format'
@@ -93,6 +95,9 @@ export default function ResultsGrid({
   const [search, setSearch] = useState('')
   const [edits, setEdits] = useState<Record<number, Record<number, unknown>>>({})
   const [deleted, setDeleted] = useState<Set<number>>(new Set())
+  // Rows being composed for insertion: each is a sparse map of column index -> value.
+  // Columns left untouched are omitted from the INSERT so DB defaults apply.
+  const [newRows, setNewRows] = useState<Record<number, unknown>[]>([])
   const [editing, setEditing] = useState<{ r: number; c: number } | null>(null)
   const [editingValue, setEditingValue] = useState('')
   const [jsonEdit, setJsonEdit] = useState<{ r: number; c: number } | null>(null)
@@ -103,6 +108,7 @@ export default function ResultsGrid({
   useEffect(() => {
     setEdits({})
     setDeleted(new Set())
+    setNewRows([])
     setEditing(null)
     setCellError(null)
     setPushError(null)
@@ -120,21 +126,49 @@ export default function ResultsGrid({
 
   const editable = !!editContext && meta.hasPk && !locked
 
+  const existingCount = result?.rows.length ?? 0
+  const isNewRow = (r: number): boolean => r >= existingCount
+  const newIdx = (r: number): number => r - existingCount
+
   const updatedRowCount = Object.keys(edits).filter(
     (r) => !deleted.has(Number(r)) && Object.keys(edits[Number(r)]).length > 0
   ).length
-  const totalChanges = updatedRowCount + deleted.size
+  // Only count new rows that have at least one value filled in; blank rows are ignored.
+  const filledNewCount = newRows.filter((row) => Object.keys(row).length > 0).length
+  const totalChanges = updatedRowCount + deleted.size + filledNewCount
 
   const typeOf = (c: number): string => meta.byName.get(columns[c])?.type ?? 'text'
+  const originalValue = (r: number, c: number): unknown =>
+    isNewRow(r) ? null : result!.rows[r][c]
   const displayValue = (r: number, c: number): unknown => {
+    if (isNewRow(r)) {
+      const row = newRows[newIdx(r)]
+      return row && c in row ? row[c] : null
+    }
     const e = edits[r]
     if (e && c in e) return e[c]
     return result!.rows[r][c]
   }
-  const isDirty = (r: number, c: number): boolean => !!edits[r] && c in edits[r]
+  /** Whether a cell carries a pending value (a new-row entry, or an edit to an existing row). */
+  const isDirty = (r: number, c: number): boolean => {
+    if (isNewRow(r)) {
+      const row = newRows[newIdx(r)]
+      return !!row && c in row
+    }
+    return !!edits[r] && c in edits[r]
+  }
 
   /** Store an edit for a cell (clearing it when the value matches the original). */
   const applyCellEdit = (r: number, c: number, value: unknown): void => {
+    if (isNewRow(r)) {
+      const idx = newIdx(r)
+      setNewRows((prev) => {
+        const next = prev.slice()
+        next[idx] = { ...(next[idx] ?? {}), [c]: value }
+        return next
+      })
+      return
+    }
     const original = result!.rows[r][c]
     setEdits((prev) => {
       const next = { ...prev }
@@ -174,7 +208,7 @@ export default function ResultsGrid({
     const { r, c } = editing
     const type = typeOf(c)
     const kind = inputKind(type)
-    const original = result!.rows[r][c]
+    const original = originalValue(r, c)
     let value: unknown
     try {
       if (raw === '') value = null
@@ -211,9 +245,16 @@ export default function ResultsGrid({
       return n
     })
 
+  const addNewRow = (): void => setNewRows((prev) => [...prev, {}])
+  const removeNewRow = (idx: number): void => {
+    setEditing(null)
+    setNewRows((prev) => prev.filter((_, i) => i !== idx))
+  }
+
   const revert = (): void => {
     setEdits({})
     setDeleted(new Set())
+    setNewRows([])
     setEditing(null)
     setCellError(null)
     setPushError(null)
@@ -236,7 +277,15 @@ export default function ResultsGrid({
       if (Object.keys(set).length) updates.push({ where: pkWhere(r), set })
     }
     const deletes: RowChanges['deletes'] = [...deleted].map((r) => ({ where: pkWhere(r) }))
+    const inserts: RowChanges['inserts'] = newRows
+      .map((row) => {
+        const values: Record<string, unknown> = {}
+        for (const cStr of Object.keys(row)) values[columns[Number(cStr)]] = row[Number(cStr)]
+        return { values }
+      })
+      .filter((ins) => Object.keys(ins.values).length > 0)
     const res = await window.api.db.applyChanges(editContext.connectionId, editContext.table, {
+      inserts,
       updates,
       deletes
     })
@@ -309,6 +358,16 @@ export default function ResultsGrid({
             </div>
           )}
 
+          {editable && (
+            <button
+              className="flex items-center gap-1 rounded-md px-2 py-1 font-semibold text-ink-soft hover:bg-bg-hover hover:text-ink"
+              onClick={addNewRow}
+              disabled={pushing}
+              title="Add a new row to insert"
+            >
+              <Plus size={12} /> Add row
+            </button>
+          )}
           {editable && totalChanges > 0 && (
             <>
               <button
@@ -445,6 +504,62 @@ export default function ResultsGrid({
                             'null'
                           ) : (
                             cellString(v)
+                          )}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                )
+              })}
+              {newRows.map((_nr, idx) => {
+                const r = existingCount + idx
+                return (
+                  <tr key={`new-${idx}`} className="bg-ok/10">
+                    <td className="group/cell border-b border-r border-line/60 bg-bg-panel px-1 py-1 text-right font-mono text-[10px] text-ink-faint">
+                      <button
+                        className="inline-flex items-center gap-1"
+                        title="Remove new row"
+                        onClick={() => removeNewRow(idx)}
+                      >
+                        <X size={11} className="text-ink-faint group-hover/cell:text-bad" />
+                        <span className="text-ok">+</span>
+                      </button>
+                    </td>
+                    {columns.map((_c, c) => {
+                      const editingHere = editing?.r === r && editing?.c === c
+                      const provided = isDirty(r, c)
+                      const v = displayValue(r, c)
+                      const kind = inputKind(typeOf(c))
+                      return (
+                        <td
+                          key={c}
+                          className={cn(
+                            'max-w-[420px] truncate border-b border-r border-line/60 px-3 py-1 font-mono cursor-text',
+                            provided && v === null && 'italic text-ink-faint'
+                          )}
+                          title={provided ? cellString(v) : 'Double-click to set · leave blank for default'}
+                          onDoubleClick={() => beginEdit(r, c)}
+                        >
+                          {editingHere ? (
+                            <CellEditor
+                              kind={kind}
+                              value={editingValue}
+                              error={!!cellError}
+                              onChange={setEditingValue}
+                              onCommit={commitValue}
+                              onCancel={() => {
+                                setEditing(null)
+                                setCellError(null)
+                              }}
+                            />
+                          ) : provided ? (
+                            v === null ? (
+                              'null'
+                            ) : (
+                              cellString(v)
+                            )
+                          ) : (
+                            <span className="italic text-ink-faint/60">default</span>
                           )}
                         </td>
                       )

@@ -10,6 +10,7 @@ import type {
   GitCommit,
   GitGraphCommit,
   GitFile,
+  GitStash,
   MergeMode,
   RowChanges
 } from '@shared/types'
@@ -61,7 +62,7 @@ const api = {
       id: string,
       table: string,
       changes: RowChanges
-    ): Promise<Result<{ updated: number; deleted: number }>> =>
+    ): Promise<Result<{ inserted: number; updated: number; deleted: number }>> =>
       ipcRenderer.invoke('db:applyChanges', { id, table, changes }),
     setReadOnly: (id: string, readOnly: boolean): Promise<Result> =>
       ipcRenderer.invoke('db:setReadOnly', { id, readOnly }),
@@ -78,6 +79,16 @@ const api = {
       path: string,
       params: { hash?: string; file: string; staged?: boolean; untracked?: boolean }
     ): Promise<Result<string>> => ipcRenderer.invoke('git:diff', { path, ...params }),
+    stashList: (path: string): Promise<Result<GitStash[]>> =>
+      ipcRenderer.invoke('git:stashList', path),
+    stashPush: (path: string, message?: string, includeUntracked?: boolean): Promise<Result> =>
+      ipcRenderer.invoke('git:stashPush', { path, message, includeUntracked }),
+    stashApply: (path: string, ref: string): Promise<Result> =>
+      ipcRenderer.invoke('git:stashApply', { path, ref }),
+    stashPop: (path: string, ref: string): Promise<Result> =>
+      ipcRenderer.invoke('git:stashPop', { path, ref }),
+    stashDrop: (path: string, ref: string): Promise<Result> =>
+      ipcRenderer.invoke('git:stashDrop', { path, ref }),
     stage: (path: string, files: string[]): Promise<Result> =>
       ipcRenderer.invoke('git:stage', { path, files }),
     stageAll: (path: string): Promise<Result> => ipcRenderer.invoke('git:stageAll', path),

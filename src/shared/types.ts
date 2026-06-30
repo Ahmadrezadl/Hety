@@ -161,6 +161,18 @@ export interface GitGraphCommit {
   refs: string[]
 }
 
+/** A saved entry from `git stash list`. */
+export interface GitStash {
+  /** position in the stash stack (0 = most recent). */
+  index: number
+  /** reflog selector, e.g. `stash@{0}`. */
+  ref: string
+  /** human description (the part after "WIP on <branch>:" / "On <branch>:"). */
+  message: string
+  /** branch the stash was created on, best-effort. */
+  branch: string
+}
+
 export type MergeMode = 'default' | 'no-ff' | 'squash' | 'no-commit'
 export interface GitStatus {
   isRepo: boolean
@@ -178,6 +190,7 @@ export interface GitStatus {
 }
 
 export interface RowChanges {
+  inserts: { values: Record<string, unknown> }[]
   updates: { where: Record<string, unknown>; set: Record<string, unknown> }[]
   deletes: { where: Record<string, unknown> }[]
 }
