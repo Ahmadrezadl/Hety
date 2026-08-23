@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode, type MouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode, type MouseEvent } from 'react'
 import {
   ChevronRight,
   ChevronDown,
@@ -65,6 +65,33 @@ export default function SchemaTree({
   const [open, setOpen] = useState<Set<string>>(initial)
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [filter, setFilter] = useState('')
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const treeRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+        if (!treeRef.current?.contains(e.target as Node)) return
+        e.preventDefault()
+        searchRef.current?.focus()
+        searchRef.current?.select()
+        return
+      }
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return
+      if (!selectedKey?.startsWith('t:') && !selectedKey?.startsWith('v:')) return
+      if (!treeRef.current?.contains(target) && target !== document.body) return
+      if (e.key.length === 1) {
+        e.preventDefault()
+        setFilter((prev) => prev + e.key)
+        searchRef.current?.focus()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [selectedKey])
 
   const q = filter.toLowerCase().trim()
   const forceOpen = q.length > 0
@@ -109,15 +136,27 @@ export default function SchemaTree({
   }
 
   return (
-    <div className="select-none text-[13px]">
+    <div
+      ref={treeRef}
+      tabIndex={-1}
+      className="select-none text-[13px] outline-none"
+      onMouseDown={() => treeRef.current?.focus()}
+    >
       <div className="sticky top-0 z-10 bg-bg-panel p-2">
         <div className="relative">
           <Search size={12} className="pointer-events-none absolute left-2 top-2 text-ink-faint" />
           <input
+            ref={searchRef}
             className="w-full rounded-md bg-bg-input py-1.5 pl-7 pr-2 text-xs outline-none placeholder:text-ink-faint focus:ring-1 focus:ring-accent"
-            placeholder="Search tables, columns…"
+            placeholder="Search tables, columns… (Ctrl+F)"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                setFilter('')
+                e.currentTarget.blur()
+              }
+            }}
           />
         </div>
       </div>
@@ -153,6 +192,8 @@ export default function SchemaTree({
                         depth={single ? 2 : 3}
                         open={st.open}
                         columns={st.columns}
+                        selected={selectedKey === key}
+                        onSelect={() => setSelectedKey(key)}
                         onToggle={() => toggle(key)}
                         onOpen={() => onOpenTable(s.name, t)}
                         onContext={(e) => openMenu(e, tableMenu(t))}
@@ -179,6 +220,8 @@ export default function SchemaTree({
                         depth={single ? 2 : 3}
                         open={st.open}
                         columns={st.columns}
+                        selected={selectedKey === key}
+                        onSelect={() => setSelectedKey(key)}
                         onToggle={() => toggle(key)}
                         onOpen={() => onOpenTable(s.name, t)}
                         onContext={(e) => openMenu(e, tableMenu(t))}
@@ -290,6 +333,8 @@ function TableNode({
   depth,
   open,
   columns,
+  selected,
+  onSelect,
   onToggle,
   onOpen,
   onContext,
@@ -300,6 +345,8 @@ function TableNode({
   open: boolean
   /** columns to render when expanded (a filtered subset while searching). */
   columns: SchemaColumn[]
+  selected?: boolean
+  onSelect: () => void
   onToggle: () => void
   onOpen: () => void
   onContext: (e: MouseEvent) => void
@@ -311,8 +358,10 @@ function TableNode({
         depth={depth}
         open={open}
         onToggle={onToggle}
+        onSelect={onSelect}
         onDouble={onOpen}
         onContext={onContext}
+        selected={selected}
         icon={icon}
         label={table.name}
       />
@@ -337,19 +386,22 @@ function Row({
   icon,
   open,
   onToggle,
+  onSelect,
   onDouble,
   onContext,
   leaf,
   folder,
   bold,
   muted,
-  suffix
+  suffix,
+  selected
 }: {
   depth: number
   label: string
   icon?: ReactNode
   open?: boolean
   onToggle?: () => void
+  onSelect?: () => void
   onDouble?: () => void
   onContext?: (e: MouseEvent) => void
   leaf?: boolean
@@ -357,21 +409,37 @@ function Row({
   bold?: boolean
   muted?: boolean
   suffix?: string
+  selected?: boolean
 }): ReactNode {
+  const handleClick = (): void => {
+    if (onSelect) {
+      onSelect()
+      return
+    }
+    onToggle?.()
+  }
+  const handleChevron = (e: MouseEvent): void => {
+    e.stopPropagation()
+    onToggle?.()
+  }
   return (
     <div
-      className="flex cursor-default items-center gap-1 rounded-md py-[3px] pr-2 hover:bg-bg-hover"
+      className={`flex cursor-default items-center gap-1 rounded-md py-[3px] pr-2 hover:bg-bg-hover ${
+        selected ? 'bg-accent-dim' : ''
+      }`}
       style={{ paddingLeft: depth * 14 + 6 }}
-      onClick={onToggle}
+      onClick={handleClick}
       onDoubleClick={onDouble}
       onContextMenu={onContext}
     >
       {!leaf ? (
-        open ? (
-          <ChevronDown size={12} className="shrink-0 text-ink-faint" />
-        ) : (
-          <ChevronRight size={12} className="shrink-0 text-ink-faint" />
-        )
+        <button type="button" className="shrink-0 text-ink-faint" onClick={handleChevron}>
+          {open ? (
+            <ChevronDown size={12} />
+          ) : (
+            <ChevronRight size={12} />
+          )}
+        </button>
       ) : (
         <span className="w-3 shrink-0" />
       )}

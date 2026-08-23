@@ -38,6 +38,35 @@ export function quoteQualified(kind: DatabaseKind | string, ...parts: string[]):
     .join('.')
 }
 
+export interface TableQueryOpts {
+  where?: string
+  orderBy?: string
+  limit?: number
+}
+
+/** Build a table preview SELECT with optional WHERE / ORDER BY. */
+export function buildTableQuery(
+  kind: DatabaseKind | string,
+  schema: string,
+  table: string,
+  opts: TableQueryOpts = {}
+): string {
+  const limit = opts.limit ?? 200
+  const qualified = quoteQualified(kind, schema, table)
+  const where = opts.where?.trim()
+  const orderBy = opts.orderBy?.trim()
+  let sql: string
+  if (dialectOf(kind) === 'sqlserver') {
+    sql = `SELECT TOP ${limit} * FROM ${qualified}`
+  } else {
+    sql = `SELECT * FROM ${qualified}`
+  }
+  if (where) sql += ` WHERE ${where}`
+  if (orderBy) sql += ` ORDER BY ${orderBy}`
+  if (dialectOf(kind) !== 'sqlserver') sql += ` LIMIT ${limit}`
+  return `${sql};`
+}
+
 /** Build a "preview the first N rows" SELECT for the given dialect. */
 export function buildSelectAll(
   kind: DatabaseKind | string,
@@ -45,7 +74,5 @@ export function buildSelectAll(
   table: string,
   limit = 200
 ): string {
-  const qualified = quoteQualified(kind, schema, table)
-  if (dialectOf(kind) === 'sqlserver') return `SELECT TOP ${limit} * FROM ${qualified};`
-  return `SELECT * FROM ${qualified} LIMIT ${limit};`
+  return buildTableQuery(kind, schema, table, { limit })
 }

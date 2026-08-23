@@ -766,6 +766,7 @@ function DbSession({
     const sql = buildSelectAll(database.kind, schemaName, table.name)
     openConsole(table.name, sql, true, {
       table: qualified,
+      schema: schemaName,
       name: table.name,
       columns: table.columns
     })
