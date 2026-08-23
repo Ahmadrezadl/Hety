@@ -89,10 +89,15 @@ export default function SqlConsole({
   const [sort, setSort] = useState<SortState>(null)
   const [saveOpen, setSaveOpen] = useState(false)
   const [saveName, setSaveName] = useState('')
-  const [editorH, setEditorH] = usePersistedSize('sql.editor', 280, 100, 900)
+  const tableView = !!editTable?.schema && !!editTable.name
   const [whereClause, setWhereClause] = useState('')
   const [orderByClause, setOrderByClause] = useState('')
-  const tableView = !!editTable?.schema && !!editTable.name
+  const [editorH, setEditorH] = usePersistedSize(
+    tableView ? 'sql.editor.table' : 'sql.editor',
+    tableView ? 120 : 280,
+    100,
+    900
+  )
 
   const tableSql = (): string => {
     if (!tableView || !kind || !editTable?.schema || !editTable.name) return ''
