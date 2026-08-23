@@ -7,6 +7,7 @@ import {
   X,
   Zap,
   Terminal as TerminalIcon,
+  Copy,
   MoreHorizontal
 } from 'lucide-react'
 import type { Project, Server } from '@shared/types'
@@ -33,7 +34,7 @@ export default function SshPanel({
 }): ReactNode {
   const deleteServer = useApp((s) => s.deleteServer)
   const liveKeys = useApp((s) => s.liveSsh[project.id] ?? EMPTY_LIVE)
-  const [dialog, setDialog] = useState<{ server?: Server } | null>(null)
+  const [dialog, setDialog] = useState<{ server?: Server; duplicateFrom?: Server } | null>(null)
   const [snippetsFor, setSnippetsFor] = useState<string | null>(null)
   const [tabs, setTabs] = useState<Tab[]>([])
   const [active, setActive] = useState<string | null>(null)
@@ -163,6 +164,7 @@ export default function SshPanel({
                     onConnect={() => openSession(s)}
                     onSnippets={() => setSnippetsFor(s.id)}
                     onEdit={() => setDialog({ server: s })}
+                    onDuplicate={() => setDialog({ duplicateFrom: s })}
                     onDelete={() => {
                       if (confirm(`Delete server "${s.name}"?`)) deleteServer(project.id, s.id)
                     }}
@@ -248,7 +250,12 @@ export default function SshPanel({
       </div>
 
       {dialog && (
-        <ServerDialog projectId={project.id} server={dialog.server} onClose={() => setDialog(null)} />
+        <ServerDialog
+          projectId={project.id}
+          server={dialog.server}
+          duplicateFrom={dialog.duplicateFrom}
+          onClose={() => setDialog(null)}
+        />
       )}
       {snippetsServer && (
         <SnippetsDialog
@@ -267,6 +274,7 @@ function ServerMenu({
   onConnect,
   onSnippets,
   onEdit,
+  onDuplicate,
   onDelete
 }: {
   anchor: { top: number; bottom: number; left: number; right: number }
@@ -274,6 +282,7 @@ function ServerMenu({
   onConnect: () => void
   onSnippets: () => void
   onEdit: () => void
+  onDuplicate: () => void
   onDelete: () => void
 }): ReactNode {
   useEffect(() => {
@@ -307,6 +316,14 @@ function ServerMenu({
         label="Edit"
         onClick={() => {
           onEdit()
+          onClose()
+        }}
+      />
+      <MenuItem
+        icon={<Copy size={13} />}
+        label="Duplicate"
+        onClick={() => {
+          onDuplicate()
           onClose()
         }}
       />

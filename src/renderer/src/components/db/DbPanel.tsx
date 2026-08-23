@@ -15,6 +15,7 @@ import {
   CircleAlert,
   Lock,
   Unlock,
+  Copy,
   MoreHorizontal
 } from 'lucide-react'
 import type { Project, Database, DbSchema, SchemaTable, Server } from '@shared/types'
@@ -108,7 +109,7 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
   const [consoleReqs, setConsoleReqs] = useState<Record<string, ConsoleRequest>>({})
   /** Saved query id to open once that database session finishes connecting. */
   const [pendingQueries, setPendingQueries] = useState<Record<string, string>>({})
-  const [dialog, setDialog] = useState<{ database?: Database } | null>(null)
+  const [dialog, setDialog] = useState<{ database?: Database; duplicateFrom?: Database } | null>(null)
   const [rail, setRail] = useState<'saved' | 'history'>('saved')
   const [savedSearch, setSavedSearch] = useState('')
   const [historySearch, setHistorySearch] = useState('')
@@ -340,6 +341,7 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
                       setMenuAnchor(null)
                     }}
                     onEdit={() => setDialog({ database: d })}
+                    onDuplicate={() => setDialog({ duplicateFrom: d })}
                     onDelete={() => {
                       if (confirm(`Delete database "${d.name}"?`)) {
                         closeSession(d.id)
@@ -589,7 +591,12 @@ export default function DbPanel({ project }: { project: Project }): ReactNode {
       </div>
 
       {dialog && (
-        <DatabaseDialog project={project} database={dialog.database} onClose={() => setDialog(null)} />
+        <DatabaseDialog
+          project={project}
+          database={dialog.database}
+          duplicateFrom={dialog.duplicateFrom}
+          onClose={() => setDialog(null)}
+        />
       )}
     </div>
   )
@@ -1020,11 +1027,13 @@ function DatabaseMenu({
   anchor,
   onClose,
   onEdit,
+  onDuplicate,
   onDelete
 }: {
   anchor: { top: number; bottom: number; left: number; right: number }
   onClose: () => void
   onEdit: () => void
+  onDuplicate: () => void
   onDelete: () => void
 }): ReactNode {
   useEffect(() => {
@@ -1045,6 +1054,15 @@ function DatabaseMenu({
         }}
       >
         <Pencil size={13} /> Edit
+      </button>
+      <button
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-ink hover:bg-bg-hover"
+        onClick={() => {
+          onDuplicate()
+          onClose()
+        }}
+      >
+        <Copy size={13} /> Duplicate
       </button>
       <button
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-bad hover:bg-bg-hover"

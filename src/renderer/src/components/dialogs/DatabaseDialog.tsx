@@ -24,28 +24,34 @@ type Step = 'kind' | 'details'
 export default function DatabaseDialog({
   project,
   database,
+  duplicateFrom,
   onClose
 }: {
   project: Project
   database?: Database
+  duplicateFrom?: Database
   onClose: () => void
 }): ReactNode {
   const upsertDatabase = useApp((s) => s.upsertDatabase)
+  const source = database ?? duplicateFrom
+  const isEdit = !!database
 
-  const initialKind = getDatabaseKindInfo(database?.kind).kind
-  const [step, setStep] = useState<Step>(database ? 'details' : 'kind')
+  const initialKind = getDatabaseKindInfo(source?.kind).kind
+  const [step, setStep] = useState<Step>(source ? 'details' : 'kind')
   const [kind, setKind] = useState<DatabaseKind>(initialKind)
   const kindInfo = getDatabaseKindInfo(kind)
 
-  const [name, setName] = useState(database?.name ?? '')
-  const [host, setHost] = useState(database?.host ?? 'localhost')
-  const [port, setPort] = useState(database?.port ?? kindInfo.defaultPort)
-  const [dbName, setDbName] = useState(database?.database ?? kindInfo.defaultDatabase)
-  const [username, setUsername] = useState(database?.username ?? kindInfo.defaultUsername)
-  const [password, setPassword] = useState(database?.password ?? '')
-  const [useSsh, setUseSsh] = useState(database?.useSsh ?? false)
-  const [sshServerId, setSshServerId] = useState(database?.sshServerId ?? project.servers[0]?.id ?? '')
-  const [color, setColor] = useState<string | undefined>(database?.color)
+  const [name, setName] = useState(
+    duplicateFrom ? `${duplicateFrom.name} (copy)` : (database?.name ?? '')
+  )
+  const [host, setHost] = useState(source?.host ?? 'localhost')
+  const [port, setPort] = useState(source?.port ?? kindInfo.defaultPort)
+  const [dbName, setDbName] = useState(source?.database ?? kindInfo.defaultDatabase)
+  const [username, setUsername] = useState(source?.username ?? kindInfo.defaultUsername)
+  const [password, setPassword] = useState(source?.password ?? '')
+  const [useSsh, setUseSsh] = useState(source?.useSsh ?? false)
+  const [sshServerId, setSshServerId] = useState(source?.sshServerId ?? project.servers[0]?.id ?? '')
+  const [color, setColor] = useState<string | undefined>(source?.color)
 
   const [testing, setTesting] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
@@ -65,7 +71,7 @@ export default function DatabaseDialog({
   }
 
   const build = (): Database => ({
-    id: database?.id ?? newId(),
+    id: isEdit ? database!.id : newId(),
     name: name.trim(),
     kind,
     host: kindInfo.supportsHost ? host.trim() : '',
@@ -76,8 +82,8 @@ export default function DatabaseDialog({
     useSsh: kindInfo.supportsSsh ? useSsh : false,
     sshServerId: kindInfo.supportsSsh && useSsh ? sshServerId : undefined,
     color,
-    locked: database?.locked ?? false,
-    createdAt: database?.createdAt ?? Date.now()
+    locked: isEdit ? (database!.locked ?? false) : false,
+    createdAt: isEdit ? database!.createdAt : Date.now()
   })
 
   const copyConfig = async (): Promise<void> => {
@@ -174,11 +180,11 @@ export default function DatabaseDialog({
   }
 
   return (
-    <Modal title={database ? 'Edit database' : 'Add database'} onClose={onClose} width={600}>
+    <Modal title={isEdit ? 'Edit database' : duplicateFrom ? 'Duplicate database' : 'Add database'} onClose={onClose} width={600}>
       <div className="space-y-4">
         <ConfigActions onCopy={copyConfig} onPaste={pasteConfig} />
         <div className="flex items-center gap-3 rounded-lg border border-line bg-bg-elevated px-3 py-2">
-          {!database && (
+          {!isEdit && (
             <button
               type="button"
               className="flex h-8 w-8 items-center justify-center rounded-md text-ink-soft hover:bg-bg-hover hover:text-ink"

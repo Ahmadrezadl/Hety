@@ -9,31 +9,37 @@ import { toast } from '../../lib/toast'
 export default function ServerDialog({
   projectId,
   server,
+  duplicateFrom,
   onClose
 }: {
   projectId: string
   server?: Server
+  duplicateFrom?: Server
   onClose: () => void
 }): ReactNode {
   const upsertServer = useApp((s) => s.upsertServer)
+  const source = server ?? duplicateFrom
+  const isEdit = !!server
 
-  const [name, setName] = useState(server?.name ?? '')
-  const [host, setHost] = useState(server?.host ?? '')
-  const [port, setPort] = useState(server?.port ?? 22)
-  const [username, setUsername] = useState(server?.username ?? '')
-  const [authType, setAuthType] = useState<AuthType>(server?.authType ?? 'password')
-  const [password, setPassword] = useState(server?.password ?? '')
-  const [keyPath, setKeyPath] = useState(server?.keyPath ?? '')
-  const [keyPassphrase, setKeyPassphrase] = useState(server?.keyPassphrase ?? '')
-  const [sudoPassword, setSudoPassword] = useState(server?.sudoPassword ?? '')
-  const [color, setColor] = useState<string | undefined>(server?.color)
+  const [name, setName] = useState(
+    duplicateFrom ? `${duplicateFrom.name} (copy)` : (server?.name ?? '')
+  )
+  const [host, setHost] = useState(source?.host ?? '')
+  const [port, setPort] = useState(source?.port ?? 22)
+  const [username, setUsername] = useState(source?.username ?? '')
+  const [authType, setAuthType] = useState<AuthType>(source?.authType ?? 'password')
+  const [password, setPassword] = useState(source?.password ?? '')
+  const [keyPath, setKeyPath] = useState(source?.keyPath ?? '')
+  const [keyPassphrase, setKeyPassphrase] = useState(source?.keyPassphrase ?? '')
+  const [sudoPassword, setSudoPassword] = useState(source?.sudoPassword ?? '')
+  const [color, setColor] = useState<string | undefined>(source?.color)
 
   const save = (): void => {
     if (!name.trim() || !host.trim()) return
     upsertServer(projectId, {
       // Spread first so fields this form doesn't edit (snippets) survive a save.
-      ...server,
-      id: server?.id ?? newId(),
+      ...(isEdit ? server : duplicateFrom),
+      id: isEdit ? server!.id : newId(),
       name: name.trim(),
       host: host.trim(),
       port: Number(port) || 22,
@@ -90,7 +96,7 @@ export default function ServerDialog({
   }
 
   return (
-    <Modal title={server ? 'Edit server' : 'Add SSH server'} onClose={onClose}>
+    <Modal title={isEdit ? 'Edit server' : duplicateFrom ? 'Duplicate server' : 'Add SSH server'} onClose={onClose}>
       <div className="space-y-4">
         <ConfigActions onCopy={copyConfig} onPaste={pasteConfig} />
         <Field label="Display name">
