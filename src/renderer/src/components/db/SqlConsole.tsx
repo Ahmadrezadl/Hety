@@ -156,10 +156,11 @@ export default function SqlConsole({
   runRef.current = run
 
   // Re-run the current statement sorted by a clicked column, rewriting the SQL.
-  const sortBy = (column: string): void => {
+  const sortBy = (column: string, forceDir?: 'asc' | 'desc'): void => {
     if (tableView && kind) {
       let dir: 'asc' | 'desc' | null
-      if (!sort || sort.column !== column) dir = 'asc'
+      if (forceDir) dir = forceDir
+      else if (!sort || sort.column !== column) dir = 'asc'
       else if (sort.dir === 'asc') dir = 'desc'
       else dir = null
       const col = quoteIdent(kind, column)
@@ -177,7 +178,8 @@ export default function SqlConsole({
     const view = viewRef.current
     if (!view) return
     let dir: 'asc' | 'desc' | null
-    if (!sort || sort.column !== column) dir = 'asc'
+    if (forceDir) dir = forceDir
+    else if (!sort || sort.column !== column) dir = 'asc'
     else if (sort.dir === 'asc') dir = 'desc'
     else dir = null
     const next = applySort(view.state.doc.toString(), column, dir)
