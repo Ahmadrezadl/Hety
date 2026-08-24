@@ -13,8 +13,8 @@ import { cn, ProjectIcon, StatusDot } from '../lib/ui'
 const TAB_META: Record<WorkspaceTab, { label: string; icon: ReactNode }> = {
   ssh: { label: 'SSH', icon: <Terminal size={13} /> },
   ops: { label: 'Remote', icon: <ServerCog size={13} /> },
-  repo: { label: 'Repository', icon: <GitBranch size={13} /> },
   db: { label: 'Database', icon: <DbIcon size={13} /> },
+  repo: { label: 'Repository', icon: <GitBranch size={13} /> },
   board: { label: 'Planning', icon: <Columns3 size={13} /> }
 }
 
@@ -56,7 +56,7 @@ export function nextIndex(
  * of the places — the first Tab should then land on the newest one, not skip it.
  */
 function buildPlaces(): { places: Place[]; hasCurrent: boolean } {
-  const { data, mru, selectedProjectId, activeTab, liveSsh, liveDb } = useApp.getState()
+  const { data, mru, selectedProjectId, activeTab, liveSsh, liveDb, liveOps } = useApp.getState()
   const byId = new Map(data.projects.map((p) => [p.id, p]))
 
   const keys = [...mru]
@@ -85,7 +85,7 @@ function buildPlaces(): { places: Place[]; hasCurrent: boolean } {
       tab: parsed.tab,
       projectName: project.name,
       icon: project.icon,
-      live: projectHasLive(liveSsh, liveDb, project.id)
+      live: projectHasLive(liveSsh, liveDb, liveOps, project.id)
     })
   }
   return { places, hasCurrent }

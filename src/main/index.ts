@@ -54,6 +54,20 @@ app.whenReady().then(() => {
   })
 })
 
+// Absorb stray idle-connection errors that some drivers may still emit during teardown.
+process.on('uncaughtException', (err) => {
+  const msg = err?.message ?? String(err)
+  if (
+    /Connection terminated unexpectedly/i.test(msg) ||
+    /Connection lost/i.test(msg) ||
+    /ECONNRESET|EPIPE|ETIMEDOUT/i.test(msg)
+  ) {
+    console.warn('[hety] ignored idle connection error:', msg)
+    return
+  }
+  console.error('[hety] uncaughtException:', err)
+})
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })

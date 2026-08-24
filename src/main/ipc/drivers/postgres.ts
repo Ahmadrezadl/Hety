@@ -207,9 +207,15 @@ export async function createPostgres(p: ConnectParams): Promise<DbDriver> {
     connectionTimeoutMillis: 12000,
     statement_timeout: 0
   })
+  // pg emits 'error' on unexpected disconnect; without a listener Node treats it
+  // as an uncaught exception and Electron crashes.
+  client.on('error', (err) => {
+    p.onIdleError?.(err)
+  })
   try {
     await client.connect()
   } catch (e) {
+    client.removeAllListeners('error')
     throw new Error(`PostgreSQL: ${(e as Error).message}`)
   }
 
@@ -246,7 +252,8 @@ export async function createPostgres(p: ConnectParams): Promise<DbDriver> {
       return String(r.rows[0]?.version ?? 'PostgreSQL').split(',')[0]
     },
     close: async (): Promise<void> => {
-      await client.end()
+      client.removeAllListeners('error')
+      await client.end().catch(() => undefined)
     }
   }
 }

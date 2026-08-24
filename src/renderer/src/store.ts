@@ -15,10 +15,10 @@ export function newId(): string {
   return crypto.randomUUID()
 }
 
-type LiveKind = 'ssh' | 'db'
+type LiveKind = 'ssh' | 'db' | 'ops'
 
 /** The tabs inside a project's Workspace. */
-export type WorkspaceTab = 'ssh' | 'ops' | 'repo' | 'db' | 'board'
+export type WorkspaceTab = 'ssh' | 'ops' | 'db' | 'repo' | 'board'
 
 export const DEFAULT_TAB: WorkspaceTab = 'ssh'
 
@@ -55,9 +55,10 @@ interface AppState {
   selectedProjectId: string | null
   /** Projects whose Workspace stays mounted so SSH/DB sessions survive switching. */
   openProjectIds: string[]
-  /** Live connection keys keyed by project id (ssh sessions / db connections). */
+  /** Live connection keys keyed by project id (ssh sessions / db connections / remote ops). */
   liveSsh: Record<string, string[]>
   liveDb: Record<string, string[]>
+  liveOps: Record<string, string[]>
   /** Active Workspace tab per project — lifted out of Workspace so the palette can set it. */
   activeTab: Record<string, WorkspaceTab>
   openRequest: OpenRequest | null
@@ -118,9 +119,14 @@ function patchLive(
 export function projectHasLive(
   liveSsh: Record<string, string[]>,
   liveDb: Record<string, string[]>,
+  liveOps: Record<string, string[]>,
   projectId: string
 ): boolean {
-  return (liveSsh[projectId]?.length ?? 0) > 0 || (liveDb[projectId]?.length ?? 0) > 0
+  return (
+    (liveSsh[projectId]?.length ?? 0) > 0 ||
+    (liveDb[projectId]?.length ?? 0) > 0 ||
+    (liveOps[projectId]?.length ?? 0) > 0
+  )
 }
 
 /** Stable empty list for zustand selectors — never return a fresh `[]` from getSnapshot. */
@@ -133,6 +139,7 @@ export const useApp = create<AppState>((set, get) => ({
   openProjectIds: [],
   liveSsh: {},
   liveDb: {},
+  liveOps: {},
   activeTab: {},
   openRequest: null,
   paletteOpen: false,
@@ -202,6 +209,7 @@ export const useApp = create<AppState>((set, get) => ({
     }
     const { [id]: _s, ...liveSsh } = get().liveSsh
     const { [id]: _d, ...liveDb } = get().liveDb
+    const { [id]: _o, ...liveOps } = get().liveOps
     const { [id]: _t, ...activeTab } = get().activeTab
     set({
       data,
@@ -209,6 +217,7 @@ export const useApp = create<AppState>((set, get) => ({
       openProjectIds: get().openProjectIds.filter((x) => x !== id),
       liveSsh,
       liveDb,
+      liveOps,
       activeTab,
       mru: get().mru.filter((k) => parsePlace(k)?.projectId !== id)
     })
@@ -323,8 +332,10 @@ export const useApp = create<AppState>((set, get) => ({
   setLive: (kind, projectId, key, live) => {
     if (kind === 'ssh') {
       set({ liveSsh: patchLive(get().liveSsh, projectId, key, live) })
-    } else {
+    } else if (kind === 'db') {
       set({ liveDb: patchLive(get().liveDb, projectId, key, live) })
+    } else {
+      set({ liveOps: patchLive(get().liveOps, projectId, key, live) })
     }
   }
 }))

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { basicSetup } from 'codemirror'
 import { EditorView, keymap } from '@codemirror/view'
 import { Compartment } from '@codemirror/state'
@@ -12,12 +12,15 @@ import ResultsGrid from './ResultsGrid'
 import { Modal, Button, Input } from '../../lib/ui'
 import { ResizeHandle, usePersistedSize } from '../../lib/resize'
 import { buildSqlNamespace, defaultSchemaFor, sqlDialectFor } from '../../lib/sqlCompletion'
+import { buildTableQuery, quoteIdent } from '@shared/sql'
 
 export type SortState = { column: string; dir: 'asc' | 'desc' } | null
 
 export interface EditTable {
   /** fully quoted `schema.table`, used when writing changes back. */
   table: string
+  /** schema namespace the table lives in. */
+  schema?: string
   /** bare table name, completed without a prefix inside this console. */
   name?: string
   columns: SchemaColumn[]
@@ -86,7 +89,29 @@ export default function SqlConsole({
   const [sort, setSort] = useState<SortState>(null)
   const [saveOpen, setSaveOpen] = useState(false)
   const [saveName, setSaveName] = useState('')
-  const [editorH, setEditorH] = usePersistedSize('sql.editor', 280, 100, 900)
+  const tableView = !!editTable?.schema && !!editTable.name
+  const [whereClause, setWhereClause] = useState('')
+  const [orderByClause, setOrderByClause] = useState('')
+  const [editorH, setEditorH] = usePersistedSize(
+    tableView ? 'sql.editor.table' : 'sql.editor',
+    tableView ? 120 : 280,
+    100,
+    900
+  )
+
+  const tableSql = (): string => {
+    if (!tableView || !kind || !editTable?.schema || !editTable.name) return ''
+    return buildTableQuery(kind, editTable.schema, editTable.name, {
+      where: whereClause,
+      orderBy: orderByClause
+    })
+  }
+
+  const syncEditor = (sql: string): void => {
+    const view = viewRef.current
+    if (!view) return
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: sql } })
+  }
 
   const execute = async (stmt: string): Promise<void> => {
     if (!connRef.current) return
@@ -117,19 +142,44 @@ export default function SqlConsole({
   const run = (): void => {
     const view = viewRef.current
     if (!view) return
-    const sel = view.state.selection.main
-    const text = sel.empty ? view.state.doc.toString() : view.state.sliceDoc(sel.from, sel.to)
-    setSort(null) // a manual run clears any column-sort indicator
+    let text: string
+    if (tableView) {
+      text = tableSql()
+      syncEditor(text)
+    } else {
+      const sel = view.state.selection.main
+      text = sel.empty ? view.state.doc.toString() : view.state.sliceDoc(sel.from, sel.to)
+    }
+    setSort(null)
     void execute(text)
   }
   runRef.current = run
 
   // Re-run the current statement sorted by a clicked column, rewriting the SQL.
-  const sortBy = (column: string): void => {
+  const sortBy = (column: string, forceDir?: 'asc' | 'desc'): void => {
+    if (tableView && kind) {
+      let dir: 'asc' | 'desc' | null
+      if (forceDir) dir = forceDir
+      else if (!sort || sort.column !== column) dir = 'asc'
+      else if (sort.dir === 'asc') dir = 'desc'
+      else dir = null
+      const col = quoteIdent(kind, column)
+      const nextOrder = dir ? `${col} ${dir.toUpperCase()}` : ''
+      setOrderByClause(nextOrder)
+      setSort(dir ? { column, dir } : null)
+      const sql = buildTableQuery(kind, editTable!.schema!, editTable!.name!, {
+        where: whereClause,
+        orderBy: nextOrder
+      })
+      syncEditor(sql)
+      void execute(sql)
+      return
+    }
     const view = viewRef.current
     if (!view) return
     let dir: 'asc' | 'desc' | null
-    if (!sort || sort.column !== column) dir = 'asc'
+    if (forceDir) dir = forceDir
+    else if (!sort || sort.column !== column) dir = 'asc'
     else if (sort.dir === 'asc') dir = 'desc'
     else dir = null
     const next = applySort(view.state.doc.toString(), column, dir)
@@ -205,6 +255,21 @@ export default function SqlConsole({
     setSaveOpen(true)
   }
 
+  const runTableFilters = (): void => {
+    if (!tableView) return
+    const sql = tableSql()
+    syncEditor(sql)
+    setSort(null)
+    void execute(sql)
+  }
+
+  const filterKeyDown = (e: KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      runTableFilters()
+    }
+  }
+
   const confirmSave = (): void => {
     const view = viewRef.current
     const stmt = view?.state.doc.toString().trim()
@@ -215,7 +280,7 @@ export default function SqlConsole({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-line bg-bg-panel px-3 py-1.5">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line bg-bg-panel px-3 py-1.5">
         <button
           className="flex items-center gap-1.5 rounded-md bg-accent px-2.5 py-1 text-[12px] font-semibold text-white hover:bg-accent-hover disabled:opacity-40"
           disabled={!connected}
@@ -230,6 +295,28 @@ export default function SqlConsole({
         >
           <Save size={12} /> Save
         </button>
+        {tableView && (
+          <>
+            <span className="ml-1 text-[11px] font-bold uppercase tracking-wide text-ink-faint">Where</span>
+            <input
+              className="min-w-[120px] flex-1 rounded-md bg-bg-input px-2 py-1 text-xs outline-none placeholder:text-ink-faint focus:ring-1 focus:ring-accent"
+              placeholder="id = 1"
+              value={whereClause}
+              onChange={(e) => setWhereClause(e.target.value)}
+              onKeyDown={filterKeyDown}
+              disabled={!connected}
+            />
+            <span className="text-[11px] font-bold uppercase tracking-wide text-ink-faint">Order by</span>
+            <input
+              className="min-w-[120px] flex-1 rounded-md bg-bg-input px-2 py-1 text-xs outline-none placeholder:text-ink-faint focus:ring-1 focus:ring-accent"
+              placeholder="created_at DESC"
+              value={orderByClause}
+              onChange={(e) => setOrderByClause(e.target.value)}
+              onKeyDown={filterKeyDown}
+              disabled={!connected}
+            />
+          </>
+        )}
         {!connected && <span className="text-[11px] text-ink-faint">Not connected</span>}
       </div>
       <div

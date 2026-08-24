@@ -158,6 +158,10 @@ export async function createMysql(p: ConnectParams, label: string): Promise<DbDr
     throw new Error(`${label}: ${(e as Error).message}`)
   }
 
+  conn.on('error', (err) => {
+    p.onIdleError?.(err)
+  })
+
   return {
     query: async (sql): Promise<RawResult> => {
       const [rows, fields] = await conn.query({ sql, rowsAsArray: true })
@@ -194,7 +198,8 @@ export async function createMysql(p: ConnectParams, label: string): Promise<DbDr
       return `${label} ${v}`.trim()
     },
     close: async (): Promise<void> => {
-      await conn.end()
+      conn.removeAllListeners('error')
+      await conn.end().catch(() => undefined)
     }
   }
 }

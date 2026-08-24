@@ -12,6 +12,7 @@ export default function ProjectGallery(): ReactNode {
   const deleteProject = useApp((s) => s.deleteProject)
   const liveSsh = useApp((s) => s.liveSsh)
   const liveDb = useApp((s) => s.liveDb)
+  const liveOps = useApp((s) => s.liveOps)
 
   const [query, setQuery] = useState('')
   const [tag, setTag] = useState<string | null>(null)
@@ -81,7 +82,7 @@ export default function ProjectGallery(): ReactNode {
                 <ProjectCard
                   key={p.id}
                   project={p}
-                  live={projectHasLive(liveSsh, liveDb, p.id)}
+                  live={projectHasLive(liveSsh, liveDb, liveOps, p.id)}
                   onOpen={() => select(p.id)}
                   onEdit={() => setEditing(p)}
                   onDelete={() => deleteProject(p.id)}
@@ -104,7 +105,7 @@ export default function ProjectGallery(): ReactNode {
                 <ProjectCard
                   key={p.id}
                   project={p}
-                  live={projectHasLive(liveSsh, liveDb, p.id)}
+                  live={projectHasLive(liveSsh, liveDb, liveOps, p.id)}
                   onOpen={() => select(p.id)}
                   onEdit={() => setEditing(p)}
                   onDelete={() => deleteProject(p.id)}

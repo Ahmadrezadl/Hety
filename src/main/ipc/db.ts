@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { ipcMain, BrowserWindow } from 'electron'
 import net from 'node:net'
 import { randomUUID } from 'node:crypto'
 import { Client as SshClient } from 'ssh2'
@@ -25,6 +25,12 @@ interface Connection {
 }
 
 const connections = new Map<string, Connection>()
+
+function broadcast(channel: string, payload: unknown): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send(channel, payload)
+  }
+}
 
 function createTunnel(server: Server, remoteHost: string, remotePort: number): Promise<Tunnel> {
   return new Promise((resolve, reject) => {
@@ -73,6 +79,7 @@ function createTunnel(server: Server, remoteHost: string, remotePort: number): P
         settled = true
         reject(new Error(`SSH tunnel: ${e.message}`))
       }
+      // After settle, errors are absorbed so Node doesn't treat them as uncaught.
     })
     try {
       conn.connect(connectConfig(server))
@@ -82,7 +89,11 @@ function createTunnel(server: Server, remoteHost: string, remotePort: number): P
   })
 }
 
-async function openConnection(db: Database, server?: Server): Promise<Connection> {
+async function openConnection(
+  db: Database,
+  server: Server | undefined,
+  onIdleError?: (err: Error) => void
+): Promise<Connection> {
   const info = getDatabaseKindInfo(db.kind)
   if (!info.supported) {
     throw new Error(`${info.name} connections are not available in this build yet.`)
@@ -104,7 +115,8 @@ async function openConnection(db: Database, server?: Server): Promise<Connection
       port,
       database: db.database,
       username: db.username,
-      password: db.password
+      password: db.password,
+      onIdleError
     })
     return { driver, tunnel }
   } catch (e) {
@@ -131,7 +143,7 @@ export function registerDbIpc(): void {
     async (_e, { db, server }: { db: Database; server?: Server }): Promise<Result<string>> => {
       let conn: Connection | undefined
       try {
-        conn = await openConnection(db, server)
+        conn = await openConnection(db, server, () => undefined)
         const version = await conn.driver.version()
         return { ok: true, data: version }
       } catch (e) {
@@ -151,8 +163,16 @@ export function registerDbIpc(): void {
     'db:connect',
     async (_e, { db, server }: { db: Database; server?: Server }): Promise<Result<string>> => {
       try {
-        const conn = await openConnection(db, server)
         const id = randomUUID()
+        const conn = await openConnection(db, server, (err) => {
+          if (!connections.has(id)) return
+          broadcast('db:status', {
+            id,
+            status: 'error',
+            message: err.message || 'Connection terminated unexpectedly'
+          })
+          disconnect(id)
+        })
         connections.set(id, conn)
         return { ok: true, data: id }
       } catch (e) {
@@ -261,7 +281,7 @@ export function registerDbIpc(): void {
 function disconnect(id: string): void {
   const conn = connections.get(id)
   if (!conn) return
+  connections.delete(id)
   conn.driver.close().catch(() => undefined)
   conn.tunnel?.close()
-  connections.delete(id)
 }

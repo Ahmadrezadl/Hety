@@ -39,15 +39,15 @@ const MAX_RESULTS = 60
 const TAB_ICON: Record<WorkspaceTab, ReactNode> = {
   ssh: <Terminal size={15} />,
   ops: <ServerCog size={15} />,
-  repo: <GitBranch size={15} />,
   db: <DbIcon size={15} />,
+  repo: <GitBranch size={15} />,
   board: <Columns3 size={15} />
 }
 const TAB_LABEL: Record<WorkspaceTab, string> = {
   ssh: 'SSH',
   ops: 'Remote',
-  repo: 'Repository',
   db: 'Database',
+  repo: 'Repository',
   board: 'Planning'
 }
 

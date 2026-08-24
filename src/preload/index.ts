@@ -85,7 +85,17 @@ const api = {
       ipcRenderer.invoke('db:applyChanges', { id, table, changes }),
     setReadOnly: (id: string, readOnly: boolean): Promise<Result> =>
       ipcRenderer.invoke('db:setReadOnly', { id, readOnly }),
-    disconnect: (id: string): Promise<Result> => ipcRenderer.invoke('db:disconnect', { id })
+    disconnect: (id: string): Promise<Result> => ipcRenderer.invoke('db:disconnect', { id }),
+    onStatus: (
+      cb: (p: { id: string; status: 'error' | 'closed'; message?: string }) => void
+    ): (() => void) => {
+      const listener = (
+        _e: unknown,
+        p: { id: string; status: 'error' | 'closed'; message?: string }
+      ): void => cb(p)
+      ipcRenderer.on('db:status', listener)
+      return () => ipcRenderer.removeListener('db:status', listener)
+    }
   },
   git: {
     status: (path: string): Promise<Result<GitStatus>> => ipcRenderer.invoke('git:status', path),

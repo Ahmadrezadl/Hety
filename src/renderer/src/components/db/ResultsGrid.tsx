@@ -152,7 +152,7 @@ export default function ResultsGrid({
   locked?: boolean
   onReload?: () => void
   sort?: { column: string; dir: 'asc' | 'desc' } | null
-  onSort?: (column: string) => void
+  onSort?: (column: string, dir?: 'asc' | 'desc') => void
 }): ReactNode {
   const [menu, setMenu] = useState<'copy' | 'save' | null>(null)
   const [search, setSearch] = useState('')
@@ -172,6 +172,7 @@ export default function ResultsGrid({
   const [ranges, setRanges] = useState<Rect[]>([])
   const [active, setActive] = useState<{ anchor: Cell; focus: Cell } | null>(null)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; cell?: Cell } | null>(null)
+  const [colMenu, setColMenu] = useState<{ x: number; y: number; column: string } | null>(null)
   const [related, setRelated] = useState<{ column: string; target: ColumnRef; value: unknown } | null>(
     null
   )
@@ -360,7 +361,16 @@ export default function ResultsGrid({
   const openCtxMenu = (e: ReactMouseEvent, cell?: Cell): void => {
     e.preventDefault()
     gridRef.current?.focus()
+    setColMenu(null)
     setCtxMenu({ x: e.clientX, y: e.clientY, cell })
+  }
+
+  const openColMenu = (e: ReactMouseEvent, column: string): void => {
+    if (!onSort) return
+    e.preventDefault()
+    e.stopPropagation()
+    setCtxMenu(null)
+    setColMenu({ x: e.clientX, y: e.clientY, column })
   }
 
   // ---- clipboard ----
@@ -627,6 +637,7 @@ export default function ResultsGrid({
     if (key === 'Escape') {
       clearSelection()
       setCtxMenu(null)
+      setColMenu(null)
       return
     }
     if (!active) return
@@ -1001,6 +1012,7 @@ export default function ResultsGrid({
                             : c
                       }
                       onClick={onSort ? () => onSort(c) : undefined}
+                      onContextMenu={(e) => openColMenu(e, c)}
                     >
                       <span className="inline-flex items-center gap-1">
                         {col?.pk && <span className="text-warn">🔑</span>}
@@ -1096,6 +1108,32 @@ export default function ResultsGrid({
 
       {ctxMenu && (
         <GridMenu x={ctxMenu.x} y={ctxMenu.y} items={menuItems()} onClose={() => setCtxMenu(null)} />
+      )}
+
+      {colMenu && onSort && (
+        <GridMenu
+          x={colMenu.x}
+          y={colMenu.y}
+          items={[
+            {
+              label: 'Sort ascending',
+              icon: <ArrowUp size={14} />,
+              onClick: () => {
+                onSort(colMenu.column, 'asc')
+                setColMenu(null)
+              }
+            },
+            {
+              label: 'Sort descending',
+              icon: <ArrowDown size={14} />,
+              onClick: () => {
+                onSort(colMenu.column, 'desc')
+                setColMenu(null)
+              }
+            }
+          ]}
+          onClose={() => setColMenu(null)}
+        />
       )}
 
       {related && editContext && (

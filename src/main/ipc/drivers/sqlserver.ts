@@ -174,6 +174,10 @@ export async function createSqlServer(p: ConnectParams): Promise<DbDriver> {
     throw new Error(`SQL Server: ${(e as Error).message}`)
   }
 
+  pool.on('error', (err) => {
+    p.onIdleError?.(err)
+  })
+
   return {
     query: async (text): Promise<RawResult> => {
       const req = pool.request()
@@ -222,7 +226,8 @@ export async function createSqlServer(p: ConnectParams): Promise<DbDriver> {
       return String(res.recordset[0]?.v ?? 'SQL Server').split('\n')[0].trim()
     },
     close: async (): Promise<void> => {
-      await pool.close()
+      pool.removeAllListeners('error')
+      await pool.close().catch(() => undefined)
     }
   }
 }

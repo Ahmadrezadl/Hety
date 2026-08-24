@@ -29,4 +29,6 @@ export interface ConnectParams {
   database: string
   username: string
   password: string
+  /** Fired for idle disconnects / background errors that would otherwise crash the process. */
+  onIdleError?: (err: Error) => void
 }

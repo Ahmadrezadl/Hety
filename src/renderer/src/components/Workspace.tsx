@@ -21,8 +21,8 @@ import ProjectDialog from './dialogs/ProjectDialog'
 const TABS: { id: WorkspaceTab; label: string; icon: ReactNode }[] = [
   { id: 'ssh', label: 'SSH', icon: <Terminal size={15} /> },
   { id: 'ops', label: 'Remote', icon: <ServerCog size={15} /> },
-  { id: 'repo', label: 'Repository', icon: <GitBranch size={15} /> },
   { id: 'db', label: 'Database', icon: <DbIcon size={15} /> },
+  { id: 'repo', label: 'Repository', icon: <GitBranch size={15} /> },
   { id: 'board', label: 'Planning', icon: <Columns3 size={15} /> }
 ]
 
@@ -40,6 +40,7 @@ export default function Workspace({
   const deleteProject = useApp((s) => s.deleteProject)
   const sshLive = useApp((s) => (s.liveSsh[projectId]?.length ?? 0) > 0)
   const dbLive = useApp((s) => (s.liveDb[projectId]?.length ?? 0) > 0)
+  const opsLive = useApp((s) => (s.liveOps[projectId]?.length ?? 0) > 0)
   // Lives in the store so the command palette can jump straight to a tab.
   const tab = useApp((s) => s.activeTab[projectId] ?? 'ssh')
   const setActiveTab = useApp((s) => s.setActiveTab)
@@ -63,7 +64,7 @@ export default function Workspace({
           <div className="flex items-center gap-2">
             <ProjectIcon icon={project.icon} size={18} className="text-ink-faint" />
             <h1 className="truncate text-[17px] font-bold">{project.name}</h1>
-            {(sshLive || dbLive) && <StatusDot color={LIVE} />}
+            {(sshLive || dbLive || opsLive) && <StatusDot color={LIVE} />}
             {project.group && (
               <span className="rounded-md bg-bg-elevated px-1.5 py-0.5 text-[10px] font-semibold text-ink-soft">
                 {project.group}
@@ -106,7 +107,8 @@ export default function Workspace({
 
       <div className="flex items-center gap-1 border-b border-line px-4">
         {TABS.map((t) => {
-          const live = (t.id === 'ssh' && sshLive) || (t.id === 'db' && dbLive)
+          const live =
+            (t.id === 'ssh' && sshLive) || (t.id === 'db' && dbLive) || (t.id === 'ops' && opsLive)
           return (
             <button
               key={t.id}
@@ -134,11 +136,11 @@ export default function Workspace({
         <div className={cn('h-full', tab === 'ops' ? 'block' : 'hidden')}>
           <OpsPanel project={project} visible={visible && tab === 'ops'} />
         </div>
-        <div className={cn('h-full', tab === 'repo' ? 'block' : 'hidden')}>
-          <RepoPanel project={project} />
-        </div>
         <div className={cn('h-full', tab === 'db' ? 'block' : 'hidden')}>
           <DbPanel project={project} />
+        </div>
+        <div className={cn('h-full', tab === 'repo' ? 'block' : 'hidden')}>
+          <RepoPanel project={project} />
         </div>
         <div className={cn('h-full', tab === 'board' ? 'block' : 'hidden')}>
           <BoardPanel project={project} />

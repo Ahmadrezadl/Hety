@@ -26,6 +26,7 @@ export default function Sidebar(): ReactNode {
   const setPaletteOpen = useApp((s) => s.setPaletteOpen)
   const liveSsh = useApp((s) => s.liveSsh)
   const liveDb = useApp((s) => s.liveDb)
+  const liveOps = useApp((s) => s.liveOps)
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
@@ -78,7 +79,7 @@ export default function Sidebar(): ReactNode {
                 )}
               >
                 <ProjectIcon icon={p.icon} size={20} className="text-ink-faint" />
-                {projectHasLive(liveSsh, liveDb, p.id) && (
+                {projectHasLive(liveSsh, liveDb, liveOps, p.id) && (
                   <span className="absolute right-0.5 top-0.5">
                     <StatusDot color="#46c08a" />
                   </span>
@@ -166,7 +167,7 @@ export default function Sidebar(): ReactNode {
                   key={p.id}
                   project={p}
                   selected={p.id === selectedId}
-                  live={projectHasLive(liveSsh, liveDb, p.id)}
+                  live={projectHasLive(liveSsh, liveDb, liveOps, p.id)}
                   onClick={() => select(p.id)}
                 />
               ))}
@@ -191,7 +192,7 @@ export default function Sidebar(): ReactNode {
                     key={p.id}
                     project={p}
                     selected={p.id === selectedId}
-                    live={projectHasLive(liveSsh, liveDb, p.id)}
+                    live={projectHasLive(liveSsh, liveDb, liveOps, p.id)}
                     onClick={() => select(p.id)}
                   />
                   ))}
