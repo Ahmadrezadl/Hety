@@ -300,6 +300,12 @@ export interface RemoteExec {
   stderr: string
 }
 
+/** What an upload actually put on the server, so the UI can word its toast. */
+export interface UploadSummary {
+  files: number
+  folders: number
+}
+
 export type TransferKind = 'upload' | 'download'
 export interface TransferProgress {
   serverId: string

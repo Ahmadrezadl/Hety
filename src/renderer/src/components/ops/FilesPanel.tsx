@@ -25,6 +25,7 @@ import {
   FileText,
   Folder,
   FolderPlus,
+  FolderUp,
   Home,
   Link2,
   Lock,
@@ -275,13 +276,19 @@ export default function FilesPanel({
     if (ok && clipboard.op === 'move') setClipboard(null)
   }
 
-  const doUpload = async (localPaths?: string[]): Promise<void> => {
-    const res = await window.api.ops.fs.upload(server, cwd, localPaths)
+  const doUpload = async (localPaths?: string[], pickFolders?: boolean): Promise<void> => {
+    const res = await window.api.ops.fs.upload(server, cwd, localPaths, pickFolders)
     if (!res.ok) {
       toast.error(`Upload failed: ${res.error}`)
       return
     }
-    if (res.data) toast.success(`Uploaded ${res.data} file${res.data === 1 ? '' : 's'}`)
+    const done = res.data
+    if (done && (done.files || done.folders)) {
+      const parts: string[] = []
+      if (done.files) parts.push(`${done.files} file${done.files === 1 ? '' : 's'}`)
+      if (done.folders) parts.push(`${done.folders} folder${done.folders === 1 ? '' : 's'}`)
+      toast.success(`Uploaded ${parts.join(' in ')}`)
+    }
     refresh()
   }
 
@@ -295,13 +302,14 @@ export default function FilesPanel({
   const onDrop = (e: DragEvent): void => {
     e.preventDefault()
     setDropping(false)
-    const files = Array.from(e.dataTransfer.files)
-    if (!files.length) return
+    const dropped = Array.from(e.dataTransfer.files)
+    if (!dropped.length) return
     try {
-      const paths = files.map((f) => window.api.ops.pathForFile(f)).filter(Boolean)
+      // A dropped folder arrives as one entry; the main process walks it.
+      const paths = dropped.map((f) => window.api.ops.pathForFile(f)).filter(Boolean)
       if (paths.length) void doUpload(paths)
     } catch {
-      toast.error('Could not read the dropped files — use the Upload button instead.')
+      toast.error('Could not read what was dropped — use the Upload button instead.')
     }
   }
 
@@ -345,6 +353,11 @@ export default function FilesPanel({
         <ToolButton icon={<Upload size={14} />} onClick={() => void doUpload()}>
           Upload
         </ToolButton>
+        <ToolButton
+          icon={<FolderUp size={14} />}
+          title="Upload a folder (or drop one here)"
+          onClick={() => void doUpload(undefined, true)}
+        />
         <ToolButton icon={<FolderPlus size={14} />} title="New folder" onClick={promptNewFolder} />
         <ToolButton icon={<FilePlus2 size={14} />} title="New file" onClick={promptNewFile} />
         <ToolButton
@@ -448,7 +461,7 @@ export default function FilesPanel({
           <EmptyState
             icon={<Folder size={38} />}
             title={filter ? 'Nothing matches' : 'Empty folder'}
-            subtitle={filter ? 'Try a different filter.' : 'Drop files here to upload them.'}
+            subtitle={filter ? 'Try a different filter.' : 'Drop files or folders here to upload them.'}
           />
         ) : (
           <table className="w-full border-collapse">
@@ -541,7 +554,7 @@ export default function FilesPanel({
       {dropping && (
         <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center border-2 border-dashed border-accent bg-accent/10">
           <span className="rounded-lg bg-bg-panel px-3 py-2 text-[13px] font-semibold">
-            Drop to upload into {cwd}
+            Drop files or folders to upload into {cwd}
           </span>
         </div>
       )}
@@ -556,6 +569,7 @@ export default function FilesPanel({
           onNewFolder={promptNewFolder}
           onNewFile={promptNewFile}
           onUpload={() => void doUpload()}
+          onUploadFolder={() => void doUpload(undefined, true)}
           onPaste={() => void doPaste()}
           onRefresh={refresh}
           onToggleHidden={() => setShowHidden((h) => !h)}
@@ -716,6 +730,7 @@ function SpaceMenu({
   onNewFolder,
   onNewFile,
   onUpload,
+  onUploadFolder,
   onPaste,
   onRefresh,
   onToggleHidden
@@ -728,6 +743,7 @@ function SpaceMenu({
   onNewFolder: () => void
   onNewFile: () => void
   onUpload: () => void
+  onUploadFolder: () => void
   onPaste: () => void
   onRefresh: () => void
   onToggleHidden: () => void
@@ -741,6 +757,12 @@ function SpaceMenu({
       <MenuItem icon={<FolderPlus size={13} />} label="New folder" onClick={onNewFolder} onClose={onClose} />
       <MenuItem icon={<FilePlus2 size={13} />} label="New file" onClick={onNewFile} onClose={onClose} />
       <MenuItem icon={<Upload size={13} />} label="Upload files here" onClick={onUpload} onClose={onClose} />
+      <MenuItem
+        icon={<FolderUp size={13} />}
+        label="Upload folder here"
+        onClick={onUploadFolder}
+        onClose={onClose}
+      />
       <MenuItem
         icon={<ClipboardPaste size={13} />}
         label={clipboard ? `Paste ${clipboard.paths.length} item(s)` : 'Paste'}

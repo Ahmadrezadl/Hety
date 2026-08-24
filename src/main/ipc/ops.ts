@@ -1,7 +1,8 @@
 import { ipcMain, BrowserWindow, dialog } from 'electron'
 import { Client as SshClient, type SFTPWrapper, type FileEntryWithStats } from 'ssh2'
 import { randomBytes } from 'node:crypto'
-import { basename } from 'node:path'
+import { readdir, stat as statLocal } from 'node:fs/promises'
+import { basename, join as joinLocal } from 'node:path'
 import { connectConfig } from './ssh'
 import {
   asScript,
@@ -48,7 +49,8 @@ import type {
   UpdateReport,
   ServiceUnit,
   DockerReport,
-  TransferProgress
+  TransferProgress,
+  UploadSummary
 } from '@shared/types'
 
 /** Bytes of a text file we are willing to pull into the editor. */
@@ -481,16 +483,68 @@ function reportProgress(p: TransferProgress): void {
   broadcast('ops:progress', p)
 }
 
-async function upload(session: Session, localPaths: string[], remoteDir: string): Promise<number> {
-  const sftp = await getSftp(session)
-  let index = 0
+/** One local file queued for upload, with the path it takes under the target. */
+interface UploadItem {
+  local: string
+  /** Slash-separated path relative to the drop target, e.g. `dist/assets/app.js`. */
+  relative: string
+}
+
+/**
+ * Expand a drop or a picker selection into the files to send and the folders
+ * that have to exist first. Dropped folders arrive as a single path, so we walk
+ * them here and keep their shape in `relative`.
+ */
+async function collectUploads(
+  localPaths: string[]
+): Promise<{ files: UploadItem[]; dirs: string[] }> {
+  const files: UploadItem[] = []
+  const dirs: string[] = []
+
+  const walk = async (local: string, relative: string): Promise<void> => {
+    const st = await statLocal(local)
+    if (!st.isDirectory()) {
+      files.push({ local, relative })
+      return
+    }
+    // Recorded even when empty, so an empty folder still lands on the server.
+    dirs.push(relative)
+    for (const child of await readdir(local, { withFileTypes: true })) {
+      await walk(joinLocal(local, child.name), `${relative}/${child.name}`)
+    }
+  }
+
   for (const local of localPaths) {
-    index++
+    // basename() already copes with trailing separators and Windows paths.
     const name = basename(local)
+    if (name) await walk(local, name)
+  }
+  return { files, dirs }
+}
+
+async function upload(
+  session: Session,
+  localPaths: string[],
+  remoteDir: string
+): Promise<UploadSummary> {
+  const { files, dirs } = await collectUploads(localPaths)
+  const sftp = await getSftp(session)
+
+  // Build the tree first — fastPut cannot create missing parents. Batched so a
+  // deep folder does not blow past the shell's argument limit.
+  for (let i = 0; i < dirs.length; i += 50) {
+    const batch = dirs.slice(i, i + 50).map((d) => q(joinPath(remoteDir, d)))
+    await mutate(session, `mkdir -p -- ${batch.join(' ')}`)
+  }
+
+  let index = 0
+  for (const item of files) {
+    index++
+    const name = item.relative
     const put = (remote: string): Promise<void> =>
       new Promise<void>((resolve, reject) => {
         sftp.fastPut(
-          local,
+          item.local,
           remote,
           {
             step: (transferred: number, _chunk: number, total: number) =>
@@ -501,7 +555,7 @@ async function upload(session: Session, localPaths: string[], remoteDir: string)
                 transferred,
                 total,
                 index,
-                count: localPaths.length,
+                count: files.length,
                 done: false
               })
           },
@@ -510,7 +564,7 @@ async function upload(session: Session, localPaths: string[], remoteDir: string)
       })
 
     try {
-      await put(joinPath(remoteDir, name))
+      await put(joinPath(remoteDir, item.relative))
     } catch (e) {
       // Target directory is not writable by the login user: stage the file in
       // /tmp over SFTP, then move it into place with elevated rights.
@@ -518,7 +572,7 @@ async function upload(session: Session, localPaths: string[], remoteDir: string)
       const temp = `/tmp/hety-${randomBytes(6).toString('hex')}`
       await put(temp)
       try {
-        await mutate(session, `mv -- ${q(temp)} ${q(joinPath(remoteDir, name))}`)
+        await mutate(session, `mv -- ${q(temp)} ${q(joinPath(remoteDir, item.relative))}`)
       } catch (moveError) {
         await execRaw(session, `rm -f ${q(temp)}`)
         throw moveError
@@ -531,11 +585,11 @@ async function upload(session: Session, localPaths: string[], remoteDir: string)
     name: '',
     transferred: 1,
     total: 1,
-    index: localPaths.length,
-    count: localPaths.length,
+    index: files.length,
+    count: files.length,
     done: true
   })
-  return localPaths.length
+  return { files: files.length, folders: dirs.length }
 }
 
 async function download(
@@ -992,22 +1046,23 @@ export function registerOpsIpc(): void {
     }
   )
 
-  handle<number, WithServer<{ remoteDir: string; localPaths?: string[] }>>(
-    'ops:fs:upload',
-    async (s, { remoteDir, localPaths }) => {
-      let files = localPaths
-      if (!files?.length) {
-        const win = BrowserWindow.getAllWindows()[0]
-        const picked = await dialog.showOpenDialog(win, {
-          title: `Upload to ${remoteDir}`,
-          properties: ['openFile', 'multiSelections']
-        })
-        if (picked.canceled || !picked.filePaths.length) return 0
-        files = picked.filePaths
-      }
-      return upload(s, files, remoteDir)
+  handle<
+    UploadSummary,
+    WithServer<{ remoteDir: string; localPaths?: string[]; folders?: boolean }>
+  >('ops:fs:upload', async (s, { remoteDir, localPaths, folders }) => {
+    let picks = localPaths
+    if (!picks?.length) {
+      const win = BrowserWindow.getAllWindows()[0]
+      const picked = await dialog.showOpenDialog(win, {
+        title: folders ? `Upload a folder to ${remoteDir}` : `Upload to ${remoteDir}`,
+        // Windows and Linux honour only one of these, so pick per the caller.
+        properties: [folders ? 'openDirectory' : 'openFile', 'multiSelections']
+      })
+      if (picked.canceled || !picked.filePaths.length) return { files: 0, folders: 0 }
+      picks = picked.filePaths
     }
-  )
+    return upload(s, picks, remoteDir)
+  })
 
   handle<string | null, WithServer<{ path: string; isDir: boolean }>>(
     'ops:fs:download',

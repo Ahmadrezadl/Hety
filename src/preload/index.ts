@@ -24,7 +24,8 @@ import type {
   UpdateReport,
   ServiceUnit,
   DockerReport,
-  TransferProgress
+  TransferProgress,
+  UploadSummary
 } from '@shared/types'
 
 type SshStatus = { id: string; status: 'connected' | 'closed' | 'error'; message?: string }
@@ -226,8 +227,13 @@ const api = {
         ipcRenderer.invoke('ops:fs:size', { server, path }),
       tail: (server: Server, path: string, lines?: number): Promise<Result<string>> =>
         ipcRenderer.invoke('ops:fs:tail', { server, path, lines }),
-      upload: (server: Server, remoteDir: string, localPaths?: string[]): Promise<Result<number>> =>
-        ipcRenderer.invoke('ops:fs:upload', { server, remoteDir, localPaths }),
+      upload: (
+        server: Server,
+        remoteDir: string,
+        localPaths?: string[],
+        folders?: boolean
+      ): Promise<Result<UploadSummary>> =>
+        ipcRenderer.invoke('ops:fs:upload', { server, remoteDir, localPaths, folders }),
       download: (server: Server, path: string, isDir: boolean): Promise<Result<string | null>> =>
         ipcRenderer.invoke('ops:fs:download', { server, path, isDir })
     },
