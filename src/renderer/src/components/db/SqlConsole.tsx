@@ -28,7 +28,12 @@ export interface EditTable {
 
 /** Rewrite a SELECT to sort by `column` (or remove sorting when dir is null),
  *  preserving any trailing LIMIT/OFFSET. */
-function applySort(sql: string, column: string, dir: 'asc' | 'desc' | null): string {
+function applySort(
+  sql: string,
+  column: string,
+  dir: 'asc' | 'desc' | null,
+  kind?: DatabaseKind | string
+): string {
   let s = sql.trim()
   let semi = ''
   while (s.endsWith(';')) {
@@ -43,7 +48,7 @@ function applySort(sql: string, column: string, dir: 'asc' | 'desc' | null): str
     s = s.slice(0, m.index).trimEnd()
   }
   s = s.replace(/\s+order\s+by\s+[\s\S]+$/i, '').trimEnd()
-  const col = `"${column.replace(/"/g, '""')}"`
+  const col = quoteIdent(kind ?? 'postgres', column)
   const order = dir ? ` ORDER BY ${col} ${dir.toUpperCase()}` : ''
   return `${s}${order}${tail}${semi}`
 }
@@ -82,6 +87,11 @@ export default function SqlConsole({
   connRef.current = connectionId
   const onExecutedRef = useRef(onExecuted)
   onExecutedRef.current = onExecuted
+  // Last statement this console generated from the table filters, and whether a
+  // filter has been typed since. Together they tell a hand-edited statement from
+  // an untouched one, so Run doesn't discard the user's own SQL.
+  const generatedSqlRef = useRef(initialSql ?? '')
+  const filtersDirtyRef = useRef(false)
 
   const [result, setResult] = useState<QueryResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -110,7 +120,17 @@ export default function SqlConsole({
   const syncEditor = (sql: string): void => {
     const view = viewRef.current
     if (!view) return
+    generatedSqlRef.current = sql
+    filtersDirtyRef.current = false
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: sql } })
+  }
+
+  /** True once the statement in the editor no longer matches the one we generated,
+   *  i.e. the user has hand-edited it (changed the LIMIT, the select list, ...). */
+  const editorEdited = (): boolean => {
+    const view = viewRef.current
+    if (!view) return false
+    return view.state.doc.toString().trim() !== generatedSqlRef.current.trim()
   }
 
   const execute = async (stmt: string): Promise<void> => {
@@ -143,7 +163,10 @@ export default function SqlConsole({
     const view = viewRef.current
     if (!view) return
     let text: string
-    if (tableView) {
+    // In a table tab the Where / Order by inputs rebuild the statement, but only
+    // when one of them has actually been touched — otherwise whatever is in the
+    // editor wins, so a hand-edited LIMIT or select list survives Run.
+    if (tableView && filtersDirtyRef.current) {
       text = tableSql()
       syncEditor(text)
     } else {
@@ -157,14 +180,18 @@ export default function SqlConsole({
 
   // Re-run the current statement sorted by a clicked column, rewriting the SQL.
   const sortBy = (column: string, forceDir?: 'asc' | 'desc'): void => {
-    if (tableView && kind) {
-      let dir: 'asc' | 'desc' | null
-      if (forceDir) dir = forceDir
-      else if (!sort || sort.column !== column) dir = 'asc'
-      else if (sort.dir === 'asc') dir = 'desc'
-      else dir = null
-      const col = quoteIdent(kind, column)
-      const nextOrder = dir ? `${col} ${dir.toUpperCase()}` : ''
+    const view = viewRef.current
+    if (!view) return
+    let dir: 'asc' | 'desc' | null
+    if (forceDir) dir = forceDir
+    else if (!sort || sort.column !== column) dir = 'asc'
+    else if (sort.dir === 'asc') dir = 'desc'
+    else dir = null
+
+    // A table tab regenerates from the filters, unless the statement was
+    // hand-edited — then only its ORDER BY is rewritten, leaving the rest alone.
+    if (tableView && kind && !(editorEdited() && !filtersDirtyRef.current)) {
+      const nextOrder = dir ? `${quoteIdent(kind, column)} ${dir.toUpperCase()}` : ''
       setOrderByClause(nextOrder)
       setSort(dir ? { column, dir } : null)
       const sql = buildTableQuery(kind, editTable!.schema!, editTable!.name!, {
@@ -175,14 +202,12 @@ export default function SqlConsole({
       void execute(sql)
       return
     }
-    const view = viewRef.current
-    if (!view) return
-    let dir: 'asc' | 'desc' | null
-    if (forceDir) dir = forceDir
-    else if (!sort || sort.column !== column) dir = 'asc'
-    else if (sort.dir === 'asc') dir = 'desc'
-    else dir = null
-    const next = applySort(view.state.doc.toString(), column, dir)
+
+    const next = applySort(view.state.doc.toString(), column, dir, kind)
+    // Keep the Order by input in step with the sort, without marking it dirty:
+    // the edited statement stays authoritative until a filter is actually typed.
+    if (tableView && kind)
+      setOrderByClause(dir ? `${quoteIdent(kind, column)} ${dir.toUpperCase()}` : '')
     view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next } })
     setSort(dir ? { column, dir } : null)
     void execute(next)
@@ -302,7 +327,10 @@ export default function SqlConsole({
               className="min-w-[120px] flex-1 rounded-md bg-bg-input px-2 py-1 text-xs outline-none placeholder:text-ink-faint focus:ring-1 focus:ring-accent"
               placeholder="id = 1"
               value={whereClause}
-              onChange={(e) => setWhereClause(e.target.value)}
+              onChange={(e) => {
+                filtersDirtyRef.current = true
+                setWhereClause(e.target.value)
+              }}
               onKeyDown={filterKeyDown}
               disabled={!connected}
             />
@@ -311,7 +339,10 @@ export default function SqlConsole({
               className="min-w-[120px] flex-1 rounded-md bg-bg-input px-2 py-1 text-xs outline-none placeholder:text-ink-faint focus:ring-1 focus:ring-accent"
               placeholder="created_at DESC"
               value={orderByClause}
-              onChange={(e) => setOrderByClause(e.target.value)}
+              onChange={(e) => {
+                filtersDirtyRef.current = true
+                setOrderByClause(e.target.value)
+              }}
               onKeyDown={filterKeyDown}
               disabled={!connected}
             />

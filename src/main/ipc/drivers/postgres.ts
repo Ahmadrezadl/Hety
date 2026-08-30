@@ -6,8 +6,10 @@ const q = (name: string): string => '"' + name.replace(/"/g, '""') + '"'
 
 // Return date/time values as the raw DB text instead of JS Date, so timestamps
 // aren't silently shifted by the local timezone before they reach the grid.
-// 1082=date 1083=time 1114=timestamp 1184=timestamptz 1266=timetz
-for (const oid of [1082, 1083, 1114, 1184, 1266]) {
+// Intervals are included because the driver's object form ({ days: 3 }) reaches
+// the grid as JSON, which Postgres re-reads as a bare number of seconds on push.
+// 1082=date 1083=time 1114=timestamp 1184=timestamptz 1266=timetz 1186=interval
+for (const oid of [1082, 1083, 1114, 1184, 1266, 1186]) {
   pgTypes.setTypeParser(oid, (v) => v)
 }
 
