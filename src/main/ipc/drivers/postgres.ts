@@ -207,7 +207,7 @@ export async function createPostgres(p: ConnectParams): Promise<DbDriver> {
     user: p.username,
     password: p.password,
     connectionTimeoutMillis: 12000,
-    statement_timeout: 0
+    statement_timeout: p.timeoutMs ?? (p.readOnly ? 30000 : 0)
   })
   // pg emits 'error' on unexpected disconnect; without a listener Node treats it
   // as an uncaught exception and Electron crashes.
@@ -222,8 +222,23 @@ export async function createPostgres(p: ConnectParams): Promise<DbDriver> {
   }
 
   return {
+    queryReadOnly: async (sql): Promise<RawResult> => {
+      await client.query('BEGIN READ ONLY')
+      try {
+        await client.query("SET LOCAL search_path = pg_catalog, public")
+        await client.query("SET LOCAL lock_timeout = '3s'")
+        const res = await client.query<unknown[]>({ text: sql, rowMode: 'array' })
+        return { columns: res.fields.map((f) => f.name), rows: res.rows, rowCount: res.rowCount ?? res.rows.length, command: res.command }
+      } finally { await client.query('ROLLBACK').catch(() => undefined) }
+    },
+    abort: () => { void client.end().catch(() => undefined) },
     query: async (sql): Promise<RawResult> => {
       const res = await client.query<unknown[]>({ text: sql, rowMode: 'array' })
+      if (Array.isArray(res)) {
+        const statements = res as import('pg').QueryResult<unknown[]>[]
+        const last = [...statements].reverse().find((r) => r.fields?.length) ?? statements.at(-1)
+        return { columns: (last?.fields ?? []).map((f) => f.name), rows: last?.rows ?? [], rowCount: statements.reduce((count, r) => count + (r.rowCount ?? 0), 0), command: statements.map((r) => `${r.command} (${r.rowCount ?? 0})`).join('; '), statements: statements.map((r) => ({command:r.command,rowCount:r.rowCount??0})) }
+      }
       return {
         columns: (res.fields ?? []).map((f) => f.name),
         rows: (res.rows ?? []) as unknown[][],

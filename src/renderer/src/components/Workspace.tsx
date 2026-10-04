@@ -7,7 +7,8 @@ import {
   Columns3,
   Pencil,
   Trash2,
-  ServerCog
+  ServerCog,
+  Sparkles
 } from 'lucide-react'
 import { useApp, type WorkspaceTab } from '../store'
 import { cn, ProjectIcon, StatusDot } from '../lib/ui'
@@ -16,6 +17,7 @@ import OpsPanel from './ops/OpsPanel'
 import RepoPanel from './repo/RepoPanel'
 import DbPanel from './db/DbPanel'
 import BoardPanel from './board/BoardPanel'
+import CodexPanel from './ai/CodexPanel'
 import ProjectDialog from './dialogs/ProjectDialog'
 
 const TABS: { id: WorkspaceTab; label: string; icon: ReactNode }[] = [
@@ -23,7 +25,8 @@ const TABS: { id: WorkspaceTab; label: string; icon: ReactNode }[] = [
   { id: 'ops', label: 'Remote', icon: <ServerCog size={15} /> },
   { id: 'db', label: 'Database', icon: <DbIcon size={15} /> },
   { id: 'repo', label: 'Repository', icon: <GitBranch size={15} /> },
-  { id: 'board', label: 'Planning', icon: <Columns3 size={15} /> }
+  { id: 'board', label: 'Planning', icon: <Columns3 size={15} /> },
+  { id: 'ai', label: 'AI / Codex', icon: <Sparkles size={15} /> }
 ]
 
 const LIVE = '#46c08a'
@@ -144,6 +147,9 @@ export default function Workspace({
         </div>
         <div className={cn('h-full', tab === 'board' ? 'block' : 'hidden')}>
           <BoardPanel project={project} />
+        </div>
+        <div className={cn('h-full', tab === 'ai' ? 'block' : 'hidden')}>
+          <CodexPanel project={project} visible={visible && tab === 'ai'} />
         </div>
       </div>
 

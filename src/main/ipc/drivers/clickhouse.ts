@@ -10,7 +10,7 @@ interface CompactJson {
   rows?: number
 }
 
-async function introspect(client: ClickHouseClient, database: string): Promise<DbSchema> {
+async function introspect(client: ClickHouseClient, database: string, signal?: AbortSignal): Promise<DbSchema> {
   const db = database || 'default'
   const ns: SchemaNamespace = { name: db, tables: [], views: [], enums: [] }
   const index = new Map<string, SchemaTable>()
@@ -18,6 +18,7 @@ async function introspect(client: ClickHouseClient, database: string): Promise<D
   const tablesRs = await client.query({
     query: `SELECT name, engine FROM system.tables WHERE database = {db:String} ORDER BY name`,
     query_params: { db },
+    abort_signal: signal,
     format: 'JSONEachRow'
   })
   const tables = (await tablesRs.json()) as { name: string; engine: string }[]
@@ -31,6 +32,7 @@ async function introspect(client: ClickHouseClient, database: string): Promise<D
   const colsRs = await client.query({
     query: `SELECT table, name, type FROM system.columns WHERE database = {db:String} ORDER BY table, position`,
     query_params: { db },
+    abort_signal: signal,
     format: 'JSONEachRow'
   })
   const cols = (await colsRs.json()) as { table: string; name: string; type: string }[]
@@ -43,12 +45,14 @@ async function introspect(client: ClickHouseClient, database: string): Promise<D
 }
 
 export async function createClickHouse(p: ConnectParams): Promise<DbDriver> {
+  const controller = new AbortController()
   const client = createClient({
     url: `http://${p.host}:${p.port}`,
     username: p.username || 'default',
     password: p.password ?? '',
     database: p.database || 'default',
-    request_timeout: 60000
+    request_timeout: p.timeoutMs ?? (p.readOnly ? 30000 : 60000),
+    ...(p.readOnly ? { clickhouse_settings: { readonly: '1' } } : {})
   })
   try {
     const ping = await client.query({ query: 'SELECT 1', format: 'JSONCompact' })
@@ -59,6 +63,12 @@ export async function createClickHouse(p: ConnectParams): Promise<DbDriver> {
   }
 
   return {
+    queryReadOnly: async (sql): Promise<RawResult> => {
+      const rs = await client.query({ query: sql, format: 'JSONCompact', abort_signal: controller.signal, clickhouse_settings: { readonly: '1', max_execution_time: 30 } })
+      const json = (await rs.json()) as CompactJson
+      return { columns: (json.meta ?? []).map((m) => m.name), rows: json.data ?? [], rowCount: json.rows ?? json.data?.length ?? 0 }
+    },
+    abort: () => controller.abort(),
     query: async (sql): Promise<RawResult> => {
       const stmt = sql.trim().replace(/;\s*$/, '')
       if (READ_RE.test(stmt)) {
@@ -73,7 +83,7 @@ export async function createClickHouse(p: ConnectParams): Promise<DbDriver> {
       await client.command({ query: stmt })
       return { columns: [], rows: [], rowCount: 0, command: 'OK' }
     },
-    introspect: () => introspect(client, p.database),
+    introspect: () => introspect(client, p.database, p.readOnly ? controller.signal : undefined),
     lookupRows: async (): Promise<RawResult> => {
       // ClickHouse has no foreign keys, so nothing ever references a row here.
       throw new Error('Foreign keys are not supported for ClickHouse.')

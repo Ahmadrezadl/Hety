@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto'
 import { readdir, stat as statLocal } from 'node:fs/promises'
 import { basename, join as joinLocal } from 'node:path'
 import { connectConfig } from './ssh'
+import { execPm2Root, pm2Command, PM2_FIND_SCRIPT, readPm2, type Pm2Exec } from '../lib/pm2'
 import {
   asScript,
   cpuCores,
@@ -49,6 +50,9 @@ import type {
   UpdateReport,
   ServiceUnit,
   DockerReport,
+  Pm2Report,
+  Pm2Scope,
+  Pm2Action,
   TransferProgress,
   UploadSummary
 } from '@shared/types'
@@ -65,6 +69,7 @@ interface Session {
   sftp?: SFTPWrapper
   lastCpu?: CpuSample
   lastNet?: NetSample
+  pm2UserBinary?: string
 }
 
 const sessions = new Map<string, Session>()
@@ -891,6 +896,36 @@ async function dockerRun(session: Session, args: string, timeoutMs = 60000): Pro
 
 // ---------------------------------------------------------------- ipc surface
 
+function pm2Exec(session: Session, timeoutMs = 45000): Pm2Exec {
+  return async (scope, script) => {
+    if (scope === 'root' && !session.info.isRoot) {
+      // A global CLI may live in the user's nvm installation. Reuse its binary
+      // when root has none, while keeping root's HOME and PM2 daemon separate.
+      if (!session.pm2UserBinary) {
+        const found = await execRaw(session, `sh -lc ${q(PM2_FIND_SCRIPT)}`, undefined, timeoutMs)
+        const candidate = found.stdout.trim().split('\n').pop() ?? ''
+        if (found.code === 0 && candidate.startsWith('/')) session.pm2UserBinary = candidate
+      }
+      return execPm2Root(
+        (command, input) => execRaw(session, command, input, timeoutMs),
+        `HETY_PM2_FALLBACK=${q(session.pm2UserBinary ?? '')}\n${script}`,
+        sudoSecret(session.server)
+      )
+    }
+    const res = await execRaw(session, `sh -lc ${q(script)}`, undefined, timeoutMs)
+    const binary = res.stdout.split('@@hety-pm2-meta\n')[1]?.split('\n')[2]?.trim()
+    if (scope === 'user' && binary?.startsWith('/')) session.pm2UserBinary = binary
+    return res
+  }
+}
+
+async function pm2Run(session: Session, scope: Pm2Scope, action: Pm2Action | 'logs' | 'save', id?: number, lines?: number): Promise<string> {
+  const script = pm2Command(scope, action, id, lines)
+  const res = await pm2Exec(session, 60000)(scope, script)
+  if (res.code !== 0) throw new Error(res.stderr.trim() || res.stdout.trim() || `PM2 exited with ${res.code}`)
+  return res.stdout + res.stderr
+}
+
 type WithServer<T> = T & { server: Server }
 
 /** Wrap a handler so every ops channel returns a Result and never throws. */
@@ -1177,6 +1212,23 @@ export function registerOpsIpc(): void {
       const scope = target === 'images' ? 'image' : target === 'containers' ? 'container' : 'system'
       return dockerRun(s, `${scope} prune -f`, 180000)
     }
+  )
+
+  // ---- PM2 (the user and root daemons are independent)
+  handle<Pm2Report, WithServer<unknown>>('ops:pm2', (s) =>
+    readPm2(pm2Exec(s), s.info.isRoot, s.info.canSudo)
+  )
+  handle<string, WithServer<{ scope: Pm2Scope; action: Pm2Action; id: number }>>(
+    'ops:pm2Action', (s, { scope, action, id }) => {
+      if (!['restart', 'reload', 'stop', 'delete'].includes(action)) throw new Error('Unsupported PM2 action')
+      return pm2Run(s, scope, action, id)
+    }
+  )
+  handle<string, WithServer<{ scope: Pm2Scope; id: number; lines?: number }>>(
+    'ops:pm2Logs', (s, { scope, id, lines }) => pm2Run(s, scope, 'logs', id, lines)
+  )
+  handle<string, WithServer<{ scope: Pm2Scope }>>(
+    'ops:pm2Save', (s, { scope }) => pm2Run(s, scope, 'save')
   )
 }
 

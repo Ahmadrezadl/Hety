@@ -6,6 +6,7 @@ import {
   GitBranch,
   Database as DbIcon,
   Columns3,
+  Sparkles,
   Plus,
   LayoutGrid,
   FileCode2,
@@ -41,14 +42,16 @@ const TAB_ICON: Record<WorkspaceTab, ReactNode> = {
   ops: <ServerCog size={15} />,
   db: <DbIcon size={15} />,
   repo: <GitBranch size={15} />,
-  board: <Columns3 size={15} />
+  board: <Columns3 size={15} />,
+  ai: <Sparkles size={15} />
 }
 const TAB_LABEL: Record<WorkspaceTab, string> = {
   ssh: 'SSH',
   ops: 'Remote',
   db: 'Database',
   repo: 'Repository',
-  board: 'Planning'
+  board: 'Planning',
+  ai: 'AI / Codex'
 }
 
 export default function CommandPalette(): ReactNode {

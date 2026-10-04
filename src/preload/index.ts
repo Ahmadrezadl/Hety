@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { CodexStatus, CodexRequest, CodexEvent, CodexAttachment } from '@shared/codex'
 import type {
   AppData,
   Server,
@@ -24,6 +25,9 @@ import type {
   UpdateReport,
   ServiceUnit,
   DockerReport,
+  Pm2Report,
+  Pm2Scope,
+  Pm2Action,
   TransferProgress,
   UploadSummary
 } from '@shared/types'
@@ -32,6 +36,19 @@ type SshStatus = { id: string; status: 'connected' | 'closed' | 'error'; message
 type SshData = { id: string; data: string }
 
 const api = {
+  codex: {
+    status: (force = false): Promise<CodexStatus> => ipcRenderer.invoke('codex:status', force),
+    approveDatabase: (input: { runId: string; id: string; approve: boolean; database?: Database }): Promise<Result<AppData>> => ipcRenderer.invoke('codex:approveDatabase', input),
+    approveWrite: (input: { runId: string; id: string; approve: boolean }): Promise<Result> => ipcRenderer.invoke('codex:approveWrite', input),
+    attachment: (path: string): Promise<Result<CodexAttachment>> => ipcRenderer.invoke('codex:attachment', path),
+    start: (request: CodexRequest): Promise<Result> => ipcRenderer.invoke('codex:start', request),
+    cancel: (runId: string): Promise<Result> => ipcRenderer.invoke('codex:cancel', runId),
+    onEvent: (cb: (event: CodexEvent) => void): (() => void) => {
+      const listener = (_e: unknown, event: CodexEvent): void => cb(event)
+      ipcRenderer.on('codex:event', listener)
+      return () => ipcRenderer.removeListener('codex:event', listener)
+    }
+  },
   store: {
     getStatus: (): Promise<{ exists: boolean; encrypted: boolean }> =>
       ipcRenderer.invoke('store:getStatus'),
@@ -269,6 +286,14 @@ const api = {
       server: Server,
       target: 'images' | 'containers' | 'system'
     ): Promise<Result<string>> => ipcRenderer.invoke('ops:dockerPrune', { server, target }),
+
+    pm2: (server: Server): Promise<Result<Pm2Report>> => ipcRenderer.invoke('ops:pm2', { server }),
+    pm2Action: (server: Server, scope: Pm2Scope, action: Pm2Action, id: number): Promise<Result<string>> =>
+      ipcRenderer.invoke('ops:pm2Action', { server, scope, action, id }),
+    pm2Logs: (server: Server, scope: Pm2Scope, id: number, lines?: number): Promise<Result<string>> =>
+      ipcRenderer.invoke('ops:pm2Logs', { server, scope, id, lines }),
+    pm2Save: (server: Server, scope: Pm2Scope): Promise<Result<string>> =>
+      ipcRenderer.invoke('ops:pm2Save', { server, scope }),
 
     onProgress: (cb: (p: TransferProgress) => void): (() => void) => {
       const listener = (_e: unknown, p: TransferProgress): void => cb(p)

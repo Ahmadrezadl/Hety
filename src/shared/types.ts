@@ -465,6 +465,40 @@ export interface DockerReport {
   images: DockerImage[]
 }
 
+// ---- PM2 ----
+export type Pm2Scope = 'user' | 'root'
+export type Pm2Action = 'restart' | 'reload' | 'stop' | 'delete'
+export interface Pm2Process {
+  id: number
+  pid: number
+  name: string
+  namespace: string
+  status: string
+  mode: string
+  cpu: number
+  memory: number
+  uptime: number
+  restarts: number
+  script: string
+  cwd: string
+}
+export interface Pm2Instance {
+  scope: Pm2Scope
+  user: string
+  installed: boolean
+  accessible: boolean
+  home: string
+  binary: string
+  message?: string
+  processes: Pm2Process[]
+}
+export interface Pm2Report {
+  installed: boolean
+  instances: Pm2Instance[]
+  /** Both accounts returned the same process list; display it only once. */
+  sameList: boolean
+}
+
 export interface RowChanges {
   inserts: { values: Record<string, unknown> }[]
   updates: { where: Record<string, unknown>; set: Record<string, unknown> }[]

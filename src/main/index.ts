@@ -7,6 +7,7 @@ import { registerDbIpc } from './ipc/db'
 import { registerGitIpc } from './ipc/git'
 import { registerAppIpc } from './ipc/app'
 import { registerOpsIpc } from './ipc/ops'
+import { registerCodexIpc } from './ipc/codex'
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -46,6 +47,7 @@ app.whenReady().then(() => {
   registerGitIpc()
   registerAppIpc()
   registerOpsIpc()
+  registerCodexIpc()
 
   createWindow()
 

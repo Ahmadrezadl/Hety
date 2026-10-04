@@ -18,7 +18,7 @@ export function newId(): string {
 type LiveKind = 'ssh' | 'db' | 'ops'
 
 /** The tabs inside a project's Workspace. */
-export type WorkspaceTab = 'ssh' | 'ops' | 'db' | 'repo' | 'board'
+export type WorkspaceTab = 'ssh' | 'ops' | 'db' | 'repo' | 'board' | 'ai'
 
 export const DEFAULT_TAB: WorkspaceTab = 'ssh'
 

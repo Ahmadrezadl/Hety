@@ -163,8 +163,17 @@ export async function createMysql(p: ConnectParams, label: string): Promise<DbDr
   })
 
   return {
+    queryReadOnly: async (sql): Promise<RawResult> => {
+      await conn.query('START TRANSACTION READ ONLY')
+      try {
+        const [rows, fields] = await conn.query({ sql, rowsAsArray: true, timeout: 30000 })
+        const list = rows as unknown[][]
+        return { columns: (fields as mysql.FieldPacket[]).map((f) => f.name), rows: list, rowCount: list.length }
+      } finally { await conn.rollback().catch(() => undefined) }
+    },
+    abort: () => conn.destroy(),
     query: async (sql): Promise<RawResult> => {
-      const [rows, fields] = await conn.query({ sql, rowsAsArray: true })
+      const [rows, fields] = await conn.query({ sql, rowsAsArray: true, ...(p.timeoutMs ? {timeout:p.timeoutMs} : {}) })
       if (Array.isArray(rows)) {
         const columns = ((fields as mysql.FieldPacket[]) ?? []).map((f) => f.name)
         return { columns, rows: rows as unknown[][], rowCount: (rows as unknown[][]).length }

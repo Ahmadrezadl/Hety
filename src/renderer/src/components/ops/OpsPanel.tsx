@@ -5,6 +5,7 @@ import {
   Cog,
   FolderTree,
   Plug,
+  Workflow,
   RotateCw,
   ServerCog,
   Shield,
@@ -21,15 +22,17 @@ import MonitorPanel from './MonitorPanel'
 import SecurityPanel from './SecurityPanel'
 import ServicesPanel from './ServicesPanel'
 import DockerPanel from './DockerPanel'
+import Pm2Panel from './Pm2Panel'
 
-type SubTab = 'files' | 'monitor' | 'security' | 'services' | 'docker'
+type SubTab = 'files' | 'monitor' | 'security' | 'services' | 'docker' | 'pm2'
 
 const SUB_TABS: { id: SubTab; label: string; icon: ReactNode }[] = [
   { id: 'files', label: 'Files', icon: <FolderTree size={14} /> },
   { id: 'monitor', label: 'Monitor', icon: <Activity size={14} /> },
   { id: 'security', label: 'Security', icon: <Shield size={14} /> },
   { id: 'services', label: 'Services', icon: <Cog size={14} /> },
-  { id: 'docker', label: 'Docker', icon: <Boxes size={14} /> }
+  { id: 'docker', label: 'Docker', icon: <Boxes size={14} /> },
+  { id: 'pm2', label: 'PM2', icon: <Workflow size={14} /> }
 ]
 
 type Status = 'idle' | 'connecting' | 'connected' | 'error'
@@ -363,6 +366,9 @@ export default function OpsPanel({
                         </Pane>
                         <Pane show={tab === 'docker'}>
                           <DockerPanel server={server} active={live && tab === 'docker'} />
+                        </Pane>
+                        <Pane show={tab === 'pm2'}>
+                          <Pm2Panel server={server} active={live && tab === 'pm2'} />
                         </Pane>
                       </>
                     ) : (

@@ -25,6 +25,21 @@ Built with Electron, React, TypeScript, Vite, and Tailwind CSS.
 - PostgreSQL schema browser for schemas, tables, views, enums, and columns.
 - Multi-tab SQL console with CodeMirror autocomplete, saved queries, editable table views, and result export to Markdown, CSV, or TSV.
 - Connection testing before saving SSH and database settings.
+- Per-project **AI / Codex** tab with automatic Codex CLI detection, sign-in status, prompts, live activity and responses, and a Stop button.
+  - Prompt without a working folder using **Hety tools only**, or optionally select a repository/local folder for code tasks.
+  - Every prompt includes the current project's repositories, database/server metadata, tags, description, and planning cards. Preview or copy the exact resource context in the sidebar.
+  - Codex can inspect saved SSH servers through Hety: deployment directories and files, process environments, systemd services, and Docker configuration. These are structured read-only inspections, with optional sudo using Hety's saved credentials.
+  - Codex can inspect saved database schemas and run read-only analysis queries using Hety's saved credentials and SSH tunnels, without opening a database tab or selecting a working folder. For example: “Analyze the minimum, maximum, median and average submitted scores in the production database”. It inspects the schema and calculates aggregates over all matching rows. Query results go to Codex; saved connection passwords are not included in the project context.
+  - Read-only AI analysis supports PostgreSQL, MySQL, MariaDB and ClickHouse, using database-enforced read-only transactions/settings and a restricted SELECT surface. SQL Server supports schema inspection and separately approved write queries. Custom functions, writes, locks and multiple statements are rejected by the read-only tool. Isolated AI connections never unlock the interactive database session. Queries have a 30-second driver limit and a 45-second operation deadline; at most 200 result rows/120 KB are returned, with truncation explicitly reported. Limits apply after aggregation. Stop cancels database operations and closes their tunnels.
+  - Saved passwords, sudo passwords, private-key paths/passphrases, and server snippets are excluded from project metadata. SSH credentials stay inside Hety; requested remote configuration (including discovered database credentials) is returned to Codex.
+  - Ask, for example, “Find the production database name, username and password on my production server”, then “Add it to this project”. Codex proposes a connection with its source; Hety shows an editable review card with masked password, SSH tunnel settings, and an optional connection test. Only **Add database** saves it. **Don’t add** or **Stop** leaves the list unchanged. New connections start with editing locked.
+  - **Write requests** settings let you enable database updates, server commands, file uploads, API changes, and local files/commands independently. Settings are remembered per project. Checked actions can be proposed; **every write still requires approval** of the exact target and SQL, command, file content or request. Reads (schema inspection, SELECT analysis, structured SSH/local inspection, HTTP GET/HEAD) do not ask. Approval is single-use and tied to the run/window; declining, expiring or stopping a pending action does not execute it.
+  - Write tools include `database_write` (including transactional PostgreSQL SQL batches), `ssh_execute` (optional sudo), `ssh_upload` (SFTP), `http_request` (approved POST/PUT/PATCH/DELETE), `http_upload` (multipart POST), `local_write`, and `local_execute`. Use an application API when its business logic or cache invalidation matters. Failed or interrupted writes may partially apply; inspect their destination before retrying. HTTP redirects are refused. Database writes use isolated connections and do not unlock the database tab.
+  - **Attach file** selects upload sources up to 25 MB each (20 files per chat). Approval shows source filename, size, SHA-256 hash and destination; changed sources are refused. SFTP uploads overwrite the exact destination. Remote downloads can be requested as an approved server command. Local writes need a selected working folder and refuse path/link escapes; changed existing files are refused while waiting for approval.
+  - The Codex process always uses a read-only sandbox, with its local shell, inherited MCP servers, plugins, app connectors, browser/computer tools and hooks disabled for Hety runs. Approved changes execute through Hety's approval gate. Local command approval explicitly permits execution outside the sandbox. Without a folder, Hety uses a private scratch directory. Global Codex configuration is not modified.
+  - Chat supports Markdown, fenced code blocks (including SQL), inline code, lists, links and tables. Code blocks preserve indentation and have a Copy button. Raw HTML is not executed.
+  - Windows installations use the native Codex executable when available, with hidden subprocesses and cached installation checks.
+  - Chat stays available when switching projects or tabs during this app session. **New chat** clears the conversation; recent messages are included with follow-up prompts. Codex uses its own authentication, model configuration, and local session storage.
 - Encrypted local storage with AES-256-GCM and optional master password protection.
 
 ## Tech Stack
@@ -45,6 +60,7 @@ Built with Electron, React, TypeScript, Vite, and Tailwind CSS.
 - Git available on `PATH` for repository features
 - PostgreSQL access for database connections
 - SSH access for remote terminal and tunnel features
+- Optional AI tab: install Codex CLI (`npm install -g @openai/codex`) and sign in with `codex login`, then use **Check** in Hety. Hety detects Codex on `PATH` and the standard Windows npm install location; a desktop app installation alone may not provide the CLI.
 - A Linux host for the Remote tab; privileged actions (firewall, services, some paths) need root or `sudo`
 
 ## Getting Started
@@ -68,6 +84,22 @@ Type-check the main, preload, and renderer code:
 ```bash
 npm run typecheck
 ```
+
+Verify Codex integration (uses a local fake CLI, without contacting OpenAI):
+
+```bash
+npm run test:codex
+```
+
+For an opt-in test using your installed, signed-in Codex CLI:
+
+```bash
+node scripts/codex-smoke.cjs
+```
+
+This sends a synthetic analysis prompt to Codex and checks that it calls both Hety database tools. The database responses are fixtures; it never loads your vault or connects to a database/server. It consumes normal Codex usage.
+
+After backend changes, fully quit and reopen Hety. In development, a refreshed chat interface can still be attached to an older Electron main process. The AI panel checks the backend tool manifest and blocks prompts with a restart notice when they do not match. Each run also shows when Codex has fetched the tool list; a run that never loads Hety's tools fails explicitly.
 
 Build the app into `out`:
 

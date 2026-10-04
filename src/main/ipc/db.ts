@@ -19,7 +19,7 @@ interface Tunnel {
   localPort: number
   close: () => void
 }
-interface Connection {
+export interface Connection {
   driver: DbDriver
   tunnel?: Tunnel
 }
@@ -32,12 +32,30 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
-function createTunnel(server: Server, remoteHost: string, remotePort: number): Promise<Tunnel> {
+function createTunnel(server: Server, remoteHost: string, remotePort: number, signal?: AbortSignal): Promise<Tunnel> {
   return new Promise((resolve, reject) => {
     const conn = new SshClient()
+    let srv: net.Server | undefined
+    let closed = false
+    const sockets = new Set<net.Socket>()
+    const close = (): void => {
+      if (closed) return
+      closed = true
+      signal?.removeEventListener('abort', abort)
+      for (const socket of sockets) socket.destroy()
+      srv?.close()
+      conn.destroy()
+    }
+    const abort = (): void => { if (!settled) { settled = true; reject(new Error('Database operation stopped.')) }; close() }
     let settled = false
+    signal?.addEventListener('abort', abort, { once: true })
+    if (signal?.aborted) { abort(); return }
+    conn.on('keyboard-interactive', (_name, _instructions, _lang, prompts, finish) => finish(prompts.map(() => server.password || '')))
     conn.on('ready', () => {
-      const srv = net.createServer((sock) => {
+      if (signal?.aborted) { close(); return }
+      srv = net.createServer((sock) => {
+        sockets.add(sock)
+        sock.once('close', () => sockets.delete(sock))
         conn.forwardOut('127.0.0.1', 0, remoteHost, remotePort, (err, stream) => {
           if (err) {
             sock.destroy()
@@ -52,25 +70,16 @@ function createTunnel(server: Server, remoteHost: string, remotePort: number): P
         if (!settled) {
           settled = true
           reject(e)
+          close()
         }
       })
       srv.listen(0, '127.0.0.1', () => {
-        const localPort = (srv.address() as net.AddressInfo).port
+        if (closed) return
+        const localPort = (srv!.address() as net.AddressInfo).port
         settled = true
         resolve({
           localPort,
-          close: () => {
-            try {
-              srv.close()
-            } catch {
-              /* ignore */
-            }
-            try {
-              conn.end()
-            } catch {
-              /* ignore */
-            }
-          }
+          close
         })
       })
     })
@@ -78,22 +87,27 @@ function createTunnel(server: Server, remoteHost: string, remotePort: number): P
       if (!settled) {
         settled = true
         reject(new Error(`SSH tunnel: ${e.message}`))
+        close()
       }
       // After settle, errors are absorbed so Node doesn't treat them as uncaught.
     })
     try {
       conn.connect(connectConfig(server))
     } catch (e) {
+      settled = true
       reject(e as Error)
+      close()
     }
   })
 }
 
-async function openConnection(
+export async function openConnection(
   db: Database,
   server: Server | undefined,
-  onIdleError?: (err: Error) => void
+  onIdleError?: (err: Error) => void,
+  options: { signal?: AbortSignal; readOnly?: boolean; timeoutMs?: number } = {}
 ): Promise<Connection> {
+  if (options.signal?.aborted) throw new Error('Database operation stopped.')
   const info = getDatabaseKindInfo(db.kind)
   if (!info.supported) {
     throw new Error(`${info.name} connections are not available in this build yet.`)
@@ -104,7 +118,7 @@ async function openConnection(
   let port = db.port
   if (db.useSsh) {
     if (!server) throw new Error('SSH tunnel selected but no SSH server provided.')
-    tunnel = await createTunnel(server, db.host, db.port)
+    tunnel = await createTunnel(server, db.host, db.port, options.signal)
     host = '127.0.0.1'
     port = tunnel.localPort
   }
@@ -116,8 +130,15 @@ async function openConnection(
       database: db.database,
       username: db.username,
       password: db.password,
+      readOnly: options.readOnly,
+      timeoutMs: options.timeoutMs,
       onIdleError
     })
+    if (options.signal?.aborted) {
+      driver.abort?.()
+      void driver.close().catch(() => undefined)
+      throw new Error('Database operation stopped.')
+    }
     return { driver, tunnel }
   } catch (e) {
     tunnel?.close()
@@ -125,7 +146,7 @@ async function openConnection(
   }
 }
 
-function cellToValue(v: unknown): string | number | boolean | null {
+export function cellToValue(v: unknown): string | number | boolean | null {
   if (v === null || v === undefined) return null
   if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return v
   if (v instanceof Date) return v.toISOString()

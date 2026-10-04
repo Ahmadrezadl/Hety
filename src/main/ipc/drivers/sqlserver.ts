@@ -165,7 +165,7 @@ export async function createSqlServer(p: ConnectParams): Promise<DbDriver> {
     password: p.password,
     database: p.database || undefined,
     connectionTimeout: 12000,
-    requestTimeout: 0,
+    requestTimeout: p.timeoutMs ?? (p.readOnly ? 30000 : 0),
     options: { encrypt: true, trustServerCertificate: true, enableArithAbort: true }
   })
   try {

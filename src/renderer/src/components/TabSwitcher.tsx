@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Terminal, ServerCog, GitBranch, Database as DbIcon, Columns3 } from 'lucide-react'
+import { Terminal, ServerCog, GitBranch, Database as DbIcon, Columns3, Sparkles } from 'lucide-react'
 import {
   useApp,
   parsePlace,
@@ -15,7 +15,8 @@ const TAB_META: Record<WorkspaceTab, { label: string; icon: ReactNode }> = {
   ops: { label: 'Remote', icon: <ServerCog size={13} /> },
   db: { label: 'Database', icon: <DbIcon size={13} /> },
   repo: { label: 'Repository', icon: <GitBranch size={13} /> },
-  board: { label: 'Planning', icon: <Columns3 size={13} /> }
+  board: { label: 'Planning', icon: <Columns3 size={13} /> },
+  ai: { label: 'AI / Codex', icon: <Sparkles size={13} /> }
 }
 
 interface Place {
