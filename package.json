@@ -6,7 +6,7 @@
   "author": "Hety",
   "license": "MIT",
   "scripts": {
-    "test:codex": "node --test tests/codex.test.cjs tests/codexSsh.test.cjs tests/codexDb.test.cjs tests/codexActions.test.cjs tests/codexMarkdown.test.cjs",
+    "test:codex": "node --test tests/codex.test.cjs tests/codexSsh.test.cjs tests/codexDb.test.cjs tests/codexActions.test.cjs tests/codexMarkdown.test.cjs tests/codexAccessUi.test.cjs",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",

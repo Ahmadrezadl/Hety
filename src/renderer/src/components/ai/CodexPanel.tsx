@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Sparkles, RefreshCw, Send, Square, FolderOpen, Plus, CheckCircle2, AlertCircle, GitBranch, Database, Server, Columns3, Copy, Paperclip, X, ShieldCheck } from 'lucide-react'
+import { Sparkles, RefreshCw, Send, Square, FolderOpen, Plus, CheckCircle2, AlertCircle, Copy, Paperclip, X } from 'lucide-react'
 import type { Project, Database as DatabaseConnection } from '@shared/types'
-import { projectCodexContext, DEFAULT_CODEX_PERMISSIONS, hasCurrentHetyTools, HETY_REQUIRED_TOOLS, type CodexStatus, type CodexMessage, type DatabaseApproval, type WriteApproval, type CodexPermissions, type CodexAttachment } from '@shared/codex'
+import { projectCodexContext, hasCurrentHetyTools, HETY_REQUIRED_TOOLS, type CodexStatus, type CodexMessage, type DatabaseApproval, type WriteApproval, type CodexAttachment } from '@shared/codex'
+import { defaultCodexAccess, type CodexAccess } from '@shared/codexAccess'
 import { Button, cn } from '../../lib/ui'
 import { useApp } from '../../store'
 import DatabaseProposal from './DatabaseProposal'
 import WriteProposal from './WriteProposal'
 import ChatMarkdown from './ChatMarkdown'
+import ContextAccessSettings from './ContextAccessSettings'
 
 interface Message extends CodexMessage { id: string; error?: boolean }
 
@@ -29,11 +31,11 @@ export default function CodexPanel({ project, visible }: { project: Project; vis
   const [prompt, setPrompt] = useState('')
   const [repositoryId, setRepositoryId] = useState('')
   const [folder, setFolder] = useState('')
-  const [permissions, setPermissions] = useState<CodexPermissions>(() => {
-    try { const saved=JSON.parse(localStorage.getItem(`hety.codex.permissions.${project.id}`) ?? 'null');return Object.fromEntries(Object.entries(DEFAULT_CODEX_PERMISSIONS).map(([key,value]) => [key,typeof saved?.[key]==='boolean' ? saved[key] : value])) as unknown as CodexPermissions } catch {return {...DEFAULT_CODEX_PERMISSIONS}}
+  const [savedAccess, setSavedAccess] = useState<CodexAccess>(() => {
+    try { return defaultCodexAccess(project, JSON.parse(localStorage.getItem(`hety.codex.access.${project.id}`) ?? 'null')) } catch { return defaultCodexAccess(project) }
   })
-  const allowEdits=permissions.localWrites
-  const setAllowEdits=(value:boolean):void => setPermissions((current) => ({...current,localWrites:value}))
+  const access = defaultCodexAccess(project, savedAccess)
+  const accessSignature = JSON.stringify(access)
   const [attachments,setAttachments]=useState<CodexAttachment[]>([])
   const [attaching,setAttaching]=useState(false)
   const [messages, setMessages] = useState<Message[]>([])
@@ -48,14 +50,17 @@ export default function CodexPanel({ project, visible }: { project: Project; vis
   const [writeApproval,setWriteApproval]=useState<WriteApproval | null>(null)
   const [approving, setApproving] = useState(false)
   const runId = useRef<string | null>(null)
+  const historyStart = useRef(0)
   const mounted = useRef(true)
   const checkingRef = useRef(false)
   const scroll = useRef<HTMLDivElement>(null)
   const textarea = useRef<HTMLTextAreaElement>(null)
   const repositories = project.repositories
-  const repository = repositories.find((r) => r.id === repositoryId)
-  const cwd = repository?.path ?? (repositoryId === '__folder__' ? folder : '')
-  const context = JSON.stringify(projectCodexContext(project), null, 2)
+  const repository = repositories.find((r) => r.id === repositoryId && access.repositories[r.id] !== 'excluded')
+  const cwd = repository?.path ?? (repositoryId === '__folder__' && access.localFolder !== 'excluded' ? folder : '')
+  const localMode = repository ? access.repositories[repository.id] : access.localFolder
+  const allowEdits = localMode === 'approval' || localMode === 'full'
+  const context = JSON.stringify(projectCodexContext(project, access), null, 2)
 
   async function check(force = false): Promise<void> {
     if (checkingRef.current) return
@@ -108,7 +113,11 @@ export default function CodexPanel({ project, visible }: { project: Project; vis
   useEffect(() => {
     if (scroll.current && visible) scroll.current.scrollTop = scroll.current.scrollHeight
   }, [messages, activity, approval, writeApproval, visible])
-  useEffect(() => {try {localStorage.setItem(`hety.codex.permissions.${project.id}`,JSON.stringify(permissions))}catch{/* Preferences can still be used for this session. */}},[permissions,project.id])
+  useEffect(() => {
+    try { localStorage.setItem(`hety.codex.access.${project.id}`, accessSignature) } catch { /* Still usable for this session. */ }
+    // Don't resend previously disclosed resource data after access changes.
+    historyStart.current = messages.length
+  }, [accessSignature, project.id])
 
   async function send(): Promise<void> {
     if (runId.current || !prompt.trim() || !status?.authenticated || !hasCurrentHetyTools(status) || checking) return
@@ -126,8 +135,8 @@ export default function CodexPanel({ project, visible }: { project: Project; vis
       const result = await window.api.codex.start({
         runId: id, projectId: project.id, repositoryId: repository?.id,
         folder: repository || !cwd ? undefined : folder, prompt: text,
-        history: recentHistory(messages), allowEdits: !!cwd && allowEdits,
-        permissions:{...permissions,localWrites:!!cwd&&allowEdits},attachments
+        history: recentHistory(messages.slice(historyStart.current)), allowEdits: !!cwd && allowEdits,
+        access, attachments
       })
       if (!result.ok) throw new Error(result.error)
     } catch (e) {
@@ -206,7 +215,7 @@ export default function CodexPanel({ project, visible }: { project: Project; vis
             </div>
           </div>
           <Button size="sm" variant="ghost" onClick={() => void check(true)} disabled={checking || running} title="Check Codex installation and sign-in"><RefreshCw size={13} /> Check</Button>
-          <Button size="sm" variant="ghost" disabled={running || messages.length === 0} onClick={() => { setMessages([]); setActivity(''); setToolConnection(''); setError('') }}><Plus size={13} /> New chat</Button>
+          <Button size="sm" variant="ghost" disabled={running || messages.length === 0} onClick={() => { historyStart.current = 0; setMessages([]); setActivity(''); setToolConnection(''); setError('') }}><Plus size={13} /> New chat</Button>
         </header>
 
         {status?.message && <div className="mx-5 mt-4 rounded-lg border border-line bg-bg-elevated p-3 text-xs text-ink-soft">{status.message}</div>}
@@ -217,7 +226,7 @@ export default function CodexPanel({ project, visible }: { project: Project; vis
           {messages.length === 0 ? (
             <div className="mx-auto flex h-full max-w-xl flex-col items-center justify-center gap-4 text-center">
               <Sparkles size={34} className="text-accent-hover" />
-              <div><h2 className="text-xl font-semibold">Work with your Hety project</h2><p className="mt-2 text-sm leading-6 text-ink-soft">Codex can inspect servers, analyze databases, update records, call APIs and upload files. Reads run freely; you review and approve every write. A local working folder is optional for server, database and API tasks.</p></div>
+              <div><h2 className="text-xl font-semibold">Work with your Hety project</h2><p className="mt-2 text-sm leading-6 text-ink-soft">Choose the resources Codex can use in Context & access. Read only blocks changes, Approve changes asks before each write, and Full access allows changes without asking. A working folder is optional.</p></div>
               <div className="mt-2 flex w-full flex-col gap-2">
                 {suggestions.map((suggestion) => <button key={suggestion} className="rounded-lg border border-line bg-bg-elevated px-4 py-3 text-left text-xs text-ink-soft hover:border-accent hover:text-ink" onClick={() => { setPrompt(suggestion); textarea.current?.focus() }}>{suggestion}</button>)}
               </div>
@@ -250,11 +259,11 @@ export default function CodexPanel({ project, visible }: { project: Project; vis
         </footer>
       </section>
 
-      <aside className="w-72 shrink-0 overflow-y-auto border-l border-line bg-bg-panel p-4">
+      <aside aria-label="Codex context and access settings" className="w-[340px] shrink-0 overflow-y-auto border-l border-line bg-bg-panel p-4">
         <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-ink-soft">Local files (optional)</h3>
-        <select aria-label="Codex working repository" className="field-input" value={repository?.id ?? (repositoryId === '__folder__' ? '__folder__' : '')} disabled={running} onChange={(event) => { setRepositoryId(event.target.value); if (!event.target.value) setAllowEdits(false) }}>
+        <select aria-label="Codex working repository" className="field-input" value={repository?.id ?? (repositoryId === '__folder__' ? '__folder__' : '')} disabled={running} onChange={(event) => setRepositoryId(event.target.value)}>
           <option value="">Hety tools only</option>
-          {repositories.map((repo) => <option key={repo.id} value={repo.id}>{repo.name}</option>)}
+          {repositories.filter((repo) => access.repositories[repo.id] !== 'excluded').map((repo) => <option key={repo.id} value={repo.id}>{repo.name}</option>)}
           <option value="__folder__">Choose another folder</option>
         </select>
         {repositoryId === '__folder__' && <Button className="mt-2 w-full" size="sm" variant="ghost" disabled={running} onClick={async () => {
@@ -262,19 +271,8 @@ export default function CodexPanel({ project, visible }: { project: Project; vis
         }}><FolderOpen size={14} /> Browse folder</Button>}
         <div className="mt-2 select-text break-all text-[11px] leading-5 text-ink-faint">{cwd || 'Ready for server and project tasks without a folder.'}</div>
         <div className="my-5 border-t border-line" />
-        <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-ink-soft"><ShieldCheck size={13}/>Write requests</h3>
-        <p className="mb-3 mt-2 text-[11px] leading-5 text-ink-faint">Checked actions can be proposed. Every write still needs your approval. Reads don’t ask.</p>
-        {([['databaseWrites','Database updates'],['serverWrites','Server commands'],['uploads','File uploads'],['apiWrites','API changes']] as const).map(([key,label]) => <label key={key} className="mb-2 flex cursor-pointer items-center gap-2 text-xs"><input type="checkbox" checked={permissions[key]} disabled={running} onChange={(event) => setPermissions((current) => ({...current,[key]:event.target.checked}))}/>{label}</label>)}
-        <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs"><input type="checkbox" checked={!!cwd && allowEdits} disabled={running || !cwd} onChange={(event) => setAllowEdits(event.target.checked)} />Local files and commands</label>
-        {!cwd && <p className="mt-2 text-[11px] leading-5 text-ink-faint">Select a folder to request local writes.</p>}
-
-        <div className="my-5 border-t border-line" />
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-soft">Project context</h3>
-        <p className="mb-4 mt-2 text-[11px] leading-5 text-ink-faint">Codex uses Hety’s saved connections and SSH tunnels. Saved credentials stay inside Hety. Requested configuration and results are returned to Codex. New database connections and all write actions require approval.</p>
-        <ContextList icon={<GitBranch size={13} />} title="Repositories" entries={repositories.map((r) => ({ id: r.id, title: r.name, detail: r.path }))} />
-        <ContextList icon={<Database size={13} />} title="Databases" entries={project.databases.map((db) => ({ id: db.id, title: db.name, detail: `${db.kind} · ${db.host}:${db.port} / ${db.database}` }))} />
-        <ContextList icon={<Server size={13} />} title="Servers" entries={project.servers.map((s) => ({ id: s.id, title: s.name, detail: `${s.username}@${s.host}:${s.port}` }))} />
-        <ContextList icon={<Columns3 size={13} />} title="Planning" entries={(project.board?.columns ?? []).map((c) => ({ id: c.id, title: c.name, detail: `${c.cards.length} cards` }))} />
+        <ContextAccessSettings project={project} access={access} disabled={running} customFolder={repositoryId === '__folder__'} onChange={setSavedAccess} />
+        <p className="mt-4 text-[10px] leading-5 text-ink-faint">Saved credentials stay inside Hety. A database may use an excluded server internally as its SSH tunnel; direct access to that server stays blocked. Adding a database to the project always asks for review.</p>
         <Button size="sm" variant="ghost" className="mt-1 w-full" onClick={() => setShowContext(!showContext)}>{showContext ? 'Hide' : 'Preview'} sent context</Button>
         {showContext && <div className="mt-3">
           <Button size="sm" variant="ghost" className="mb-2" onClick={async () => {
@@ -286,11 +284,4 @@ export default function CodexPanel({ project, visible }: { project: Project; vis
       </aside>
     </div>
   )
-}
-
-function ContextList({ icon, title, entries }: { icon: ReactNode; title: string; entries: { id: string; title: string; detail: string }[] }): ReactNode {
-  return <div className="mb-4">
-    <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-ink-soft">{icon}{title}<span className="ml-auto text-ink-faint">{entries.length}</span></div>
-    {entries.length === 0 ? <div className="text-[11px] text-ink-faint">None saved</div> : entries.map((entry) => <div key={entry.id} className="mb-1.5 rounded-lg border border-line bg-bg-elevated px-2.5 py-2"><div className="truncate text-xs">{entry.title}</div><div className="mt-1 select-text break-all text-[10px] text-ink-faint">{entry.detail}</div></div>)}
-  </div>
 }

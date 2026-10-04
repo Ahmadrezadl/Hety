@@ -4,13 +4,14 @@ import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { Result, AppData, Database } from '@shared/types'
-import { buildCodexPrompt, DEFAULT_CODEX_PERMISSIONS, HETY_CODEX_INTEGRATION_VERSION, type CodexRequest, type CodexEvent, type DatabaseApproval, type WriteApproval } from '@shared/codex'
+import { buildCodexPrompt, projectCodexContext, DEFAULT_CODEX_PERMISSIONS, HETY_CODEX_INTEGRATION_VERSION, type CodexRequest, type CodexEvent, type DatabaseApproval, type WriteApproval } from '@shared/codex'
 import { getData, save, flush } from '../lib/store'
 import { checkCodex, findCodex, spawnCodex, stopCodex, codexIsolationArgs } from '../lib/codex'
 import { startHetyBridge, databaseProposal, HETY_TOOL_NAMES } from '../lib/hetyMcp'
 import { inspectServer } from '../lib/codexSsh'
 import { inspectDatabase } from '../lib/codexDb'
 import { attachmentAt, attachedFile, prepareAction, inspectLocal } from '../lib/codexActions'
+import { resolveCodexAccess, scopedCodexProject, readableMode, actionAccessMode } from '@shared/codexAccess'
 
 interface Run {
   owner: WebContents
@@ -71,6 +72,10 @@ export function registerCodexIpc(): void {
       if (!project) throw new Error('Project not found.')
       const repository = project.repositories?.find((r) => r.id === request.repositoryId)
       if (request.repositoryId && !repository) throw new Error('Repository not found.')
+      const legacyPermissions = request.permissions ?? { ...DEFAULT_CODEX_PERMISSIONS, localWrites: request.allowEdits }
+      const access = resolveCodexAccess(project, request.access, legacyPermissions)
+      if (repository) readableMode(access.repositories[repository.id])
+      else if (request.folder) readableMode(access.localFolder)
       const folder = repository?.path || request.folder
       if (folder && !path.isAbsolute(folder)) throw new Error('Working folder must be an absolute path.')
       if (!folder && request.allowEdits) throw new Error('Choose a working folder before enabling local file edits.')
@@ -90,18 +95,29 @@ export function registerCodexIpc(): void {
       const isolationArgs=await codexIsolationArgs(launcher,cwd)
       if (run.cancelled || event.sender.isDestroyed()) throw new Error('Codex run cancelled.')
       const current = run
-      const permissions = { ...(request.permissions ?? { ...DEFAULT_CODEX_PERMISSIONS, localWrites: request.allowEdits }), localWrites: !!folder && (request.permissions?.localWrites ?? request.allowEdits) }
+      // Explicit resource modes replace the old section-level write checkboxes.
+      const permissions = request.access ? { databaseWrites:true, serverWrites:true, uploads:true, apiWrites:true, localWrites:true } : { ...legacyPermissions, localWrites: !!folder && legacyPermissions.localWrites }
       const attachments = await Promise.all((request.attachments ?? []).map(async (file) => { await attachedFile(file); const verified=await attachmentAt(file.path); if(verified.id!==file.id)throw new Error('The attached file changed. Attach it again.'); return verified }))
-      request = { ...request, permissions, attachments }
+      request = { ...request, permissions, attachments, access }
       const getProject = (): typeof project => {
         if (current.controller.signal.aborted) throw new Error('Run stopped.')
         const currentProject = getData().projects.find((p) => p.id === project.id)
         if (!currentProject) throw new Error('Project was removed.')
         return currentProject
       }
+      const localTarget = (input: Record<string, unknown>): { cwd?: string; repositoryId?: string } => {
+        if (input.repositoryId !== undefined && (typeof input.repositoryId !== 'string' || input.repositoryId.length > 200)) throw new Error('Invalid repository ID.')
+        const repositoryId = (input.repositoryId as string | undefined) ?? repository?.id
+        readableMode(repositoryId ? access.repositories[repositoryId] : access.localFolder)
+        if (!repositoryId) return {cwd:folder ? cwd : undefined}
+        const target = getProject().repositories.find((item) => item.id === repositoryId)
+        if (!target) throw new Error('Repository not found in this project.')
+        return {cwd:target.path,repositoryId}
+      }
       let toolsListed = false
       const bridge = await startHetyBridge({
-        getProject,
+        getProject: () => scopedCodexProject(getProject(), access),
+        context: () => projectCodexContext(getProject(), access),
         signal: current.controller.signal,
         onToolsListed: (tools) => {
           if (toolsListed) return
@@ -109,17 +125,29 @@ export function registerCodexIpc(): void {
           send(request.runId, current, { type: 'tools', tools })
         },
         activity: (text) => send(request.runId, current, { type: 'activity', text }),
-        localInspect: (input) => inspectLocal(folder ? cwd : undefined,input),
+        localInspect: (input) => inspectLocal(localTarget(input).cwd,input),
         action: async (kind,input) => {
-          const prepared = await prepareAction(kind,input,{getProject,cwd:folder ? cwd : undefined,attachments,permissions})
-          if (kind==='http_request' && ['GET','HEAD'].includes(String(input.method).toUpperCase())) return prepared.execute(current.controller.signal)
+          const local = kind==='local_write' || kind==='local_execute' ? localTarget(input) : undefined
+          const mode = actionAccessMode(access,kind,input,local?.repositoryId)
+          const prepared = await prepareAction(kind,input,{getProject,cwd:local?.cwd,attachments,permissions})
+          const execute = async (signal: AbortSignal): Promise<object> => {
+            if (signal.aborted || current.owner.isDestroyed()) throw new Error('Run stopped; no action started.')
+            if (local && localTarget(input).cwd !== local.cwd) throw new Error('Repository folder changed. Send a new prompt.')
+            return prepared.execute(signal)
+          }
+          if (kind==='http_request' && ['GET','HEAD'].includes(String(input.method).toUpperCase())) return execute(current.controller.signal)
+          if (mode==='full') {
+            if (current.approval || current.writeApproval) throw new Error('Review the pending action first, then submit writes sequentially.')
+            send(request.runId,current,{type:'activity',text:`Full access · Executing ${prepared.review.title}: ${prepared.review.target}`})
+            return {...await execute(current.controller.signal),approvalRequired:false}
+          }
           return new Promise((resolve,reject) => {
             if (current.approval || current.writeApproval) {reject(new Error('Review the pending action first, then submit writes sequentially.'));return}
             if (current.cancelled || current.owner.isDestroyed() || current.controller.signal.aborted) {resolve({approved:false,executed:false,reason:'Run stopped.'});return}
             const draft:WriteApproval={...prepared.review,id:randomUUID()}
             let settled=false
             const timer=setTimeout(() => current.writeApproval?.complete({approved:false,executed:false,reason:'Approval expired. No action was executed.'}),540000)
-            current.writeApproval={draft,execute:prepared.execute,resolving:false,begin:() => clearTimeout(timer),complete:(result) => {
+            current.writeApproval={draft,execute,resolving:false,begin:() => clearTimeout(timer),complete:(result) => {
               if(settled)return;settled=true;clearTimeout(timer);current.writeApproval=undefined
               send(request.runId,current,{type:'approval'});resolve(result)
             }}
@@ -128,11 +156,13 @@ export function registerCodexIpc(): void {
           })
         },
         inspect: (serverId, input) => {
+          readableMode(access.servers[serverId])
           const server = getProject().servers.find((s) => s.id === serverId)
           if (!server) throw new Error('Server not found in this project.')
           return inspectServer(server, input, current.controller.signal)
         },
         database: (databaseId, input) => {
+          readableMode(access.databases[databaseId])
           const project = getProject()
           const database = project.databases.find((db) => db.id === databaseId)
           if (!database) throw new Error('Database not found in this project.')

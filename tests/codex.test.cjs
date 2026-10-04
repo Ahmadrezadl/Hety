@@ -20,13 +20,14 @@ const inspections = []
 const databaseInspections = []
 const approvedActions = []
 const proposedActions = []
+const localInspections = []
 app.getPath = () => userDataPath
 const electron = { app, ipcMain: { handle: (name, handler) => handlers.set(name, handler) } }
 const originalLoad = Module._load
 Module._load = function (name, parent, ...rest) {
   if (name === 'electron') return electron
   if (name === '../lib/codexActions' && parent.filename.endsWith(path.join('ipc','codex.ts'))) return {
-    inspectLocal:async () => ({content:'read-only'}),
+    inspectLocal:async (cwd,input) => {localInspections.push({cwd,input});return {content:'read-only'}},
     prepareAction:async (kind,input,context) => {
       if(kind==='database_write' && !context.permissions.databaseWrites)throw new Error('Write requests are disabled.')
       proposedActions.push({kind,input,context})
@@ -57,6 +58,7 @@ require.extensions['.ts'] = (module, filename) => {
   module._compile(source.outputText, filename)
 }
 const { projectCodexContext, buildCodexPrompt, hasCurrentHetyTools, HETY_CODEX_INTEGRATION_VERSION, HETY_REQUIRED_TOOLS } = require('../src/shared/codex.ts')
+const {defaultCodexAccess, resolveCodexAccess, actionAccessMode, scopedCodexProject} = require('../src/shared/codexAccess.ts')
 const { checkCodex, findCodex } = require('../src/main/lib/codex.ts')
 const { startHetyBridge } = require('../src/main/lib/hetyMcp.ts')
 require('../src/main/ipc/codex.ts').registerCodexIpc()
@@ -131,6 +133,10 @@ process.stdin.on('end', async () => {
     const rpc = async (method, params) => (await (await fetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:++id,method,params})})).json()).result
     await rpc('initialize', {protocolVersion:'2025-03-26',clientInfo:{name:'fake-codex',version:'1'},capabilities:{}})
     await rpc('tools/list')
+    if (process.env.HETY_FAKE_MODE === 'local-read' || process.env.HETY_FAKE_MODE === 'local-write') {
+      const result = await rpc('tools/call',{name:process.env.HETY_FAKE_MODE==='local-read' ? 'local_inspect' : 'local_write',arguments:{repositoryId:'repo',operation:'read_file',path:'README.md',content:'Synthetic content',reason:'Synthetic local task'}})
+      console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:result.content[0].text}}));return
+    }
     if (['write','read-http'].includes(process.env.HETY_FAKE_MODE)) {
       const arguments = process.env.HETY_FAKE_MODE==='read-http' ? {url:'https://example.test/read',method:'GET',reason:'Read records'} : {databaseId:'db',sql:"UPDATE scores SET banner = 'approved' WHERE id = 7",reason:process.env.HETY_WRITE_REASON || 'Update banner'}
       const result=await rpc('tools/call',{name:process.env.HETY_FAKE_MODE==='read-http' ? 'http_request' : 'database_write',arguments})
@@ -290,6 +296,100 @@ process.stdin.on('end', async () => {
     assert.ok(!message.includes('SSH_SECRET'))
     assert.equal(writes, beforeWrites)
     process.env.HETY_FAKE_MODE = 'success'
+  })
+  await t.test('resource policies hide excluded metadata, default new resources to reads, and reject invalid modes', () => {
+    const access=defaultCodexAccess(project)
+    assert.equal(access.databases.db,'read')
+    access.databases.db='excluded'; access.servers.server='excluded'; access.repositories.repo='excluded'
+    for(const column of project.board.columns)access.planning[column.id]='excluded'
+    const encoded=JSON.stringify(projectCodexContext(project,access))
+    for(const hidden of ['host.example','Repository','Task details','postgres'])assert.ok(!encoded.includes(hidden))
+    const prompt=buildCodexPrompt(project,request('policy',{access}),cwd)
+    assert.ok(!prompt.includes('host.example'))
+    assert.throws(()=>resolveCodexAccess(project,{...access,http:'invalid'}),/Invalid/)
+    assert.throws(()=>resolveCodexAccess(project,{...access,databases:[]}),/Invalid/)
+    assert.throws(()=>actionAccessMode(access,'database_write',{databaseId:'db'}),/excluded/)
+    const newer={...project,databases:[...project.databases,{...project.databases[0],id:'new'}]}
+    assert.equal(defaultCodexAccess(newer,access).databases.new,'read')
+    assert.equal(resolveCodexAccess(newer,access).databases.new,'excluded')
+    assert.equal(scopedCodexProject(newer,access).databases.length,0)
+  })
+  await t.test('excluded servers cannot be inspected but remain usable internally for an included database tunnel', async () => {
+    const access=defaultCodexAccess(project);access.servers.server='excluded'
+    process.env.HETY_FAKE_MODE='inspect'
+    const before=inspections.length,complete=done(owner,'excluded-server')
+    assert.equal((await start(request('excluded-server',{repositoryId:undefined,access}))).ok,true)
+    await complete
+    assert.equal(inspections.length,before)
+    assert.match(owner.events.find(e=>e.runId==='excluded-server'&&e.type==='message').text,/not found in this project/)
+    process.env.HETY_FAKE_MODE='database'
+    const completed=done(owner,'hidden-tunnel')
+    assert.equal((await start(request('hidden-tunnel',{repositoryId:undefined,access}))).ok,true)
+    await completed
+    assert.equal(databaseInspections.at(-1).server.password,'SSH_SECRET')
+    assert.equal(projectCodexContext(project,access).databases[0].sshServerId,undefined)
+    process.env.HETY_FAKE_MODE='success'
+  })
+  await t.test('read-only and excluded databases reject writes before preparing or executing an action', async () => {
+    process.env.HETY_FAKE_MODE='write'
+    for(const mode of ['read','excluded']) {
+      const access=defaultCodexAccess(project);access.databases.db=mode
+      const id=`access-${mode}`,before=proposedActions.length,executed=approvedActions.length,complete=done(owner,id)
+      assert.equal((await start(request(id,{repositoryId:undefined,access}))).ok,true)
+      await complete
+      assert.equal(proposedActions.length,before);assert.equal(approvedActions.length,executed)
+      assert.ok(!owner.events.some(e=>e.runId===id&&e.type==='approval'))
+      assert.match(owner.events.find(e=>e.runId===id&&e.type==='message').text,mode==='read' ? /read-only/ : /excluded/)
+    }
+    process.env.HETY_FAKE_MODE='success'
+  })
+  await t.test('full access executes only the chosen database without approval and settings are snapshotted per run', async () => {
+    process.env.HETY_FAKE_MODE='write'
+    const access=defaultCodexAccess(project);access.databases.db='full'
+    const before=approvedActions.length,complete=done(owner,'full-database')
+    assert.equal((await start(request('full-database',{repositoryId:undefined,access}))).ok,true)
+    access.databases.db='excluded'
+    await complete
+    assert.equal(approvedActions.length,before+1)
+    assert.ok(!owner.events.some(e=>e.runId==='full-database'&&e.type==='approval'))
+    assert.match(owner.events.find(e=>e.runId==='full-database'&&e.type==='message').text,/"approvalRequired":false/)
+    const other=defaultCodexAccess(project)
+    assert.throws(()=>actionAccessMode(other,'ssh_execute',{serverId:'server'}),/read-only/)
+    process.env.HETY_FAKE_MODE='success'
+  })
+  await t.test('resource approval mode still requires review and excluded repositories cannot be selected', async () => {
+    const access=defaultCodexAccess(project);access.databases.db='approval';access.repositories.repo='excluded'
+    assert.equal((await start(request('excluded-repo',{access}))).ok,false)
+    process.env.HETY_FAKE_MODE='write'
+    const pending=writeApprovalFor(owner,'policy-approval'),complete=done(owner,'policy-approval'),before=approvedActions.length
+    assert.equal((await start(request('policy-approval',{repositoryId:undefined,access}))).ok,true)
+    const draft=await pending
+    assert.equal(approvedActions.length,before)
+    await handlers.get('codex:approveWrite')({sender:owner},{runId:'policy-approval',id:draft.id,approve:false})
+    await complete;assert.equal(approvedActions.length,before)
+    process.env.HETY_FAKE_MODE='read-http';access.http='excluded'
+    const blocked=done(owner,'excluded-http'),requests=proposedActions.length
+    assert.equal((await start(request('excluded-http',{repositoryId:undefined,access}))).ok,true)
+    await blocked;assert.equal(proposedActions.length,requests)
+    assert.match(owner.events.find(e=>e.runId==='excluded-http'&&e.type==='message').text,/excluded/)
+    process.env.HETY_FAKE_MODE='success'
+  })
+  await t.test('included repositories can be read and written by ID without selecting a working folder', async () => {
+    const access=defaultCodexAccess(project)
+    process.env.HETY_FAKE_MODE='local-read'
+    const complete=done(owner,'repo-read')
+    assert.equal((await start(request('repo-read',{repositoryId:undefined,access}))).ok,true)
+    await complete;assert.equal(localInspections.at(-1).cwd,project.repositories[0].path)
+    access.repositories.repo='excluded'
+    const before=localInspections.length,denied=done(owner,'repo-excluded')
+    assert.equal((await start(request('repo-excluded',{repositoryId:undefined,access}))).ok,true)
+    await denied;assert.equal(localInspections.length,before)
+    process.env.HETY_FAKE_MODE='local-write';access.repositories.repo='full'
+    const written=done(owner,'repo-full'),executed=approvedActions.length
+    assert.equal((await start(request('repo-full',{repositoryId:undefined,access}))).ok,true)
+    await written;assert.equal(approvedActions.length,executed+1)
+    assert.equal(proposedActions.at(-1).context.cwd,project.repositories[0].path)
+    process.env.HETY_FAKE_MODE='success'
   })
   await t.test('each write waits for its own exact-action approval and rejects another window or replay', async () => {
     process.env.HETY_FAKE_MODE='write'
